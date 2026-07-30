@@ -1,2 +1,45 @@
-/db.sqlite3
-/venv
+# Entorno virtual
+venv/
+env/
+.venv/
+
+.env
+.env.local
+
+# Base de datos local
+db.sqlite3
+*.sqlite3
+
+# Bytecode de Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribución / empaquetado
+build/
+dist/
+*.egg-info/
+.eggs/
+
+
+# Archivos estáticos generados
+staticfiles/
+media/
+
+# Configuración de editores/IDEs
+.vscode/
+.idea/
+*.swp
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Coverage / testing
+.coverage
+htmlcov/
+.pytest_cache/
