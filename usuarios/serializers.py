@@ -82,3 +82,47 @@ class EstudianteRegistroSerializer(serializers.ModelSerializer):
         )
         
         return user
+
+
+class SolicitudRecuperacionSerializer(serializers.Serializer):
+    # Serializador (Patrón DTO): Valida que exista un usuario activo asociado al correo provisto.
+    # Al buscar en el modelo unificado User, el alcance es transversal a todos los roles.
+    email = serializers.EmailField()
+
+    def validate_email(self, value: str) -> str:
+        if not User.objects.filter(email=value, is_active=True).exists():
+            raise serializers.ValidationError("No existe un usuario activo con este correo electrónico.")
+        return value
+
+
+class ConfirmacionRecuperacionSerializer(serializers.Serializer):
+    # Serializador (Patrón DTO): Valida la integridad y vigencia temporal del token nativo de Django,
+    # procesando el cifrado de la nueva contraseña.
+    email = serializers.EmailField()
+    token = serializers.CharField()
+    new_password = serializers.CharField(write_only=True, required=True, style={'input_type': 'password'})
+
+    def validate(self, attrs: dict) -> dict:
+        email = attrs.get('email')
+        token = attrs.get('token')
+        
+        try:
+            user = User.objects.get(email=email, is_active=True)
+        except User.DoesNotExist:
+            raise serializers.ValidationError("Usuario no encontrado.")
+
+        from django.contrib.auth.tokens import default_token_generator
+        if not default_token_generator.check_token(user, token):
+            raise serializers.ValidationError("El token es inválido o ha expirado.")
+            
+        attrs['user'] = user
+        return attrs
+
+    @transaction.atomic
+    def save(self, **kwargs):
+        user = self.validated_data['user']
+        # set_password garantiza el encriptado nativo en PostgreSQL (cumplimiento RF-03)
+        user.set_password(self.validated_data['new_password'])
+        user.save()
+        return user
+
