@@ -57,11 +57,9 @@ class StaffViewSet(InstitutionIsolationMixin, ModelViewSet):
     """
     serializer_class = CreateStaffSerializer
     permission_classes = [IsAuthenticated, IsAdministrator, SameInstitutionPermission]
-
-    def get_queryset(self):
-        return CustomUser.objects.filter(
-            role__in=[CustomUser.Role.TEACHER, CustomUser.Role.OPERATIONS_STAFF]
-        )
+    queryset = CustomUser.objects.filter(
+        role__in=[CustomUser.Role.TEACHER, CustomUser.Role.OPERATIONS_STAFF]
+    )
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data, context={'request': request})

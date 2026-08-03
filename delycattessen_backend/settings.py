@@ -137,3 +137,15 @@ MEDIA_ROOT = BASE_DIR / 'media'
 
 # Configuración de vigencia de token de recuperación de contraseña (15 minutos = 900 segundos)
 PASSWORD_RESET_TIMEOUT = 900
+ 
+from datetime import timedelta
+
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ),
+}
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(hours=1),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
+}
