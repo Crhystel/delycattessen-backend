@@ -46,11 +46,13 @@ python -m venv venv
 ```
 
 Windows:
+
 ```bash
 venv\Scripts\activate
 ```
 
 Mac/Linux:
+
 ```bash
 source venv/bin/activate
 ```
@@ -79,8 +81,6 @@ Generar una `SECRET_KEY` con:
 ```bash
 python -c "from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())"
 ```
-
-El archivo `.env` no se sube al repositorio. Cada persona del equipo debe crear el suyo localmente.
 
 ### 5. Crear la base de datos en PostgreSQL
 
