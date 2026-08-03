@@ -134,3 +134,6 @@ AUTH_USER_MODEL = 'usuarios.CustomUser'
 # Media files (Profile pictures, etc.)
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
+
+# Configuración de vigencia de token de recuperación de contraseña (15 minutos = 900 segundos)
+PASSWORD_RESET_TIMEOUT = 900
