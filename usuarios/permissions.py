@@ -2,13 +2,13 @@ from rest_framework.permissions import BasePermission
 from django.utils.translation import gettext_lazy as _
 
 
-class SameLocationPermission(BasePermission):
-    message = _('No tiene acceso a la información de esta sede.')
+class SameInstitutionPermission(BasePermission):
+    message = _('No tiene acceso a la información de esta institución.')
 
     def has_object_permission(self, request, view, obj):
-        if not hasattr(obj, 'location'):
+        if not hasattr(obj, 'institution'):
             return True
-        return obj.location_id == request.user.location_id
+        return obj.institution_id == request.user.institution_id
 
 
 class IsAdministrator(BasePermission):

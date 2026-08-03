@@ -3,15 +3,16 @@ from django.contrib.auth.models import AbstractUser
 from django.utils.translation import gettext_lazy as _
 
 
-class Location(models.Model):
-    name = models.CharField(_('name'), max_length=100, unique=True)
-
-    class Meta:
-        verbose_name = _('location')
-        verbose_name_plural = _('locations')
+class Institution(models.Model):
+    name = models.CharField(_('name'), max_length=255, unique=True)
+    registration_date = models.DateTimeField(_('registration date'), auto_now_add=True)
 
     def __str__(self) -> str:
         return self.name
+
+    class Meta:
+        verbose_name = _('institution')
+        verbose_name_plural = _('institutions')
 
 
 class CustomUser(AbstractUser):
@@ -24,9 +25,9 @@ class CustomUser(AbstractUser):
 
     email = models.EmailField(_('email address'), unique=True)
     role = models.CharField(_('role'), max_length=20, choices=Role.choices, default=Role.STUDENT)
-    location = models.ForeignKey(
-        Location,
-        verbose_name=_('location'),
+    institution = models.ForeignKey(
+        Institution,
+        verbose_name=_('institution'),
         on_delete=models.PROTECT,
         null=True,
         blank=True,
@@ -41,18 +42,6 @@ class CustomUser(AbstractUser):
 
     def __str__(self) -> str:
         return self.username
-
-
-class Institution(models.Model):
-    name = models.CharField(_('name'), max_length=255, unique=True)
-    registration_date = models.DateTimeField(_('registration date'), auto_now_add=True)
-
-    def __str__(self) -> str:
-        return self.name
-
-    class Meta:
-        verbose_name = _('institution')
-        verbose_name_plural = _('institutions')
 
 
 class ParentProfile(models.Model):

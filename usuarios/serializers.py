@@ -11,8 +11,6 @@ User = get_user_model()
 
 
 class ParentRegistrationSerializer(serializers.ModelSerializer):
-    # Serializer (DTO Pattern): abstracts the database layer for Parent registration.
-    # Safely exposes input data, validating that email is the primary identifier.
     password = serializers.CharField(write_only=True, required=True, style={'input_type': 'password'})
 
     class Meta:
@@ -39,8 +37,6 @@ class ParentRegistrationSerializer(serializers.ModelSerializer):
 
 
 class StudentRegistrationSerializer(serializers.ModelSerializer):
-    # Serializer (DTO Pattern): processes Student registration performed by a Parent.
-    # Handles file upload (profile_picture) and enforces mandatory referential integrity (Institution).
     password = serializers.CharField(write_only=True, required=True, style={'input_type': 'password'})
     institution_id = serializers.PrimaryKeyRelatedField(
         queryset=Institution.objects.all(), source='institution', write_only=True
@@ -90,7 +86,7 @@ def generate_temporary_password(length=12):
 class CreateStaffSerializer(serializers.ModelSerializer):
     """
     Serializer for the Administrator to create Teacher or Operations Staff
-    accounts within their own location.
+    accounts within their own institution.
     """
     role = serializers.ChoiceField(
         choices=[(User.Role.TEACHER, _('Docente')), (User.Role.OPERATIONS_STAFF, _('Personal Operativo'))]
@@ -119,7 +115,7 @@ class CreateStaffSerializer(serializers.ModelSerializer):
             first_name=validated_data['first_name'],
             last_name=validated_data['last_name'],
             role=validated_data['role'],
-            location=admin.location,
+            institution=admin.institution,
             must_change_password=True,
         )
 
@@ -128,8 +124,6 @@ class CreateStaffSerializer(serializers.ModelSerializer):
 
 
 class PasswordResetRequestSerializer(serializers.Serializer):
-    # Serializer (DTO Pattern): validates that an active user exists for the given email.
-    # Since it searches the unified User model, its scope spans all roles.
     email = serializers.EmailField()
 
     def validate_email(self, value: str) -> str:
@@ -139,8 +133,6 @@ class PasswordResetRequestSerializer(serializers.Serializer):
 
 
 class PasswordResetConfirmSerializer(serializers.Serializer):
-    # Serializer (DTO Pattern): validates the integrity and time validity of Django's
-    # native token, and processes the encryption of the new password.
     email = serializers.EmailField()
     token = serializers.CharField()
     new_password = serializers.CharField(write_only=True, required=True, style={'input_type': 'password'})

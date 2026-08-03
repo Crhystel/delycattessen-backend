@@ -12,14 +12,12 @@ from .serializers import (
     PasswordResetRequestSerializer,
     PasswordResetConfirmSerializer,
 )
-from .permissions import IsAdministrator, SameLocationPermission, CanRequestPasswordReset
-from .mixins import LocationIsolationMixin, TokenGeneratorMixin
+from .permissions import IsAdministrator, SameInstitutionPermission, CanRequestPasswordReset
+from .mixins import InstitutionIsolationMixin, TokenGeneratorMixin
 from .models import CustomUser
 
 
 class ParentRegistrationView(generics.CreateAPIView):
-    # Controller (MVC): public registration endpoint (no authentication).
-    # Applies Single Responsibility Principle by delegating heavy logic to the Serializer.
     serializer_class = ParentRegistrationSerializer
     permission_classes = [AllowAny]
 
@@ -36,8 +34,6 @@ class ParentRegistrationView(generics.CreateAPIView):
 
 
 class StudentRegistrationView(generics.CreateAPIView):
-    # Controller (MVC): protected endpoint to create dependent profiles.
-    # Injects 'request' into the serializer (Inversion of Control) and handles file upload (MultiPart).
     serializer_class = StudentRegistrationSerializer
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser]
@@ -54,13 +50,13 @@ class StudentRegistrationView(generics.CreateAPIView):
         )
 
 
-class StaffViewSet(LocationIsolationMixin, ModelViewSet):
+class StaffViewSet(InstitutionIsolationMixin, ModelViewSet):
     """
     Allows the Administrator to create, list, and view staff
-    (Teachers and Operations Staff) at their own location.
+    (Teachers and Operations Staff) at their own institution.
     """
     serializer_class = CreateStaffSerializer
-    permission_classes = [IsAuthenticated, IsAdministrator, SameLocationPermission]
+    permission_classes = [IsAuthenticated, IsAdministrator, SameInstitutionPermission]
 
     def get_queryset(self):
         return CustomUser.objects.filter(
@@ -83,23 +79,16 @@ class StaffViewSet(LocationIsolationMixin, ModelViewSet):
 
 
 class BasePasswordResetView(generics.GenericAPIView):
-    """
-    Template Method Pattern: defines the skeleton of the processing algorithm.
-    Ensures that every password reset view follows the same flow:
-    validation -> processing -> response.
-    """
     permission_classes = [CanRequestPasswordReset]
     success_message = _('Operación exitosa')
 
     def process_recovery_action(self, serializer):
-        # Hook method (abstract) to be implemented by subclasses
         raise NotImplementedError('You must implement process_recovery_action')
 
     def post(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         self.process_recovery_action(serializer)
-
         return Response(
             {"mensaje": str(self.success_message)},
             status=status.HTTP_200_OK
@@ -107,7 +96,6 @@ class BasePasswordResetView(generics.GenericAPIView):
 
 
 class RequestPasswordResetView(TokenGeneratorMixin, BasePasswordResetView):
-    # Inherits from BasePasswordResetView (Template Method) and TokenGeneratorMixin (Mixin).
     serializer_class = PasswordResetRequestSerializer
     success_message = _('Si el correo existe en nuestra base de datos, se han enviado las instrucciones de recuperación.')
 
@@ -122,5 +110,4 @@ class ConfirmPasswordResetView(BasePasswordResetView):
     success_message = _('La contraseña ha sido restablecida exitosamente.')
 
     def process_recovery_action(self, serializer):
-        # Delegamos la persistencia al serializador
         serializer.save()

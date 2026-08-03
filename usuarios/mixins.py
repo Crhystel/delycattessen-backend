@@ -1,8 +1,10 @@
 from django.contrib.auth.tokens import default_token_generator
 
 
-class LocationIsolationMixin:
+class InstitutionIsolationMixin:
     """
+    Mixin Pattern (Template Method over DRF's get_queryset): restricts
+    access to data based on the authenticated user's institution.
     Applies exclusively to Administrator and Operations Staff.
     """
     def get_queryset(self):
@@ -10,7 +12,7 @@ class LocationIsolationMixin:
         user = self.request.user
         from .models import CustomUser
         if user.role in [CustomUser.Role.ADMIN, CustomUser.Role.OPERATIONS_STAFF]:
-            return queryset.filter(location=user.location)
+            return queryset.filter(institution=user.institution)
         return queryset.none()
 
 
