@@ -1,34 +1,35 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
-from .models import Sede, CustomUser, Institucion, PerfilPadre, PerfilEstudiante
+from django.utils.translation import gettext_lazy as _
+from .models import Location, CustomUser, Institution, ParentProfile, StudentProfile
 
 
-@admin.register(Sede)
-class SedeAdmin(admin.ModelAdmin):
-    list_display = ['nombre']
+@admin.register(Location)
+class LocationAdmin(admin.ModelAdmin):
+    list_display = ['name']
 
 
 @admin.register(CustomUser)
 class CustomUserAdmin(UserAdmin):
-    list_display = ['username', 'email', 'rol', 'sede', 'is_staff']
+    list_display = ['username', 'email', 'role', 'location', 'is_staff']
     fieldsets = UserAdmin.fieldsets + (
-        ('Información adicional', {'fields': ('rol', 'sede')}),
+        (_('Información adicional'), {'fields': ('role', 'location', 'must_change_password')}),
     )
     add_fieldsets = UserAdmin.add_fieldsets + (
-        ('Información adicional', {'fields': ('rol', 'sede', 'email')}),
+        (_('Información adicional'), {'fields': ('role', 'location', 'email')}),
     )
 
 
-@admin.register(Institucion)
-class InstitucionAdmin(admin.ModelAdmin):
-    list_display = ['nombre', 'fecha_registro']
+@admin.register(Institution)
+class InstitutionAdmin(admin.ModelAdmin):
+    list_display = ['name', 'registration_date']
 
 
-@admin.register(PerfilPadre)
-class PerfilPadreAdmin(admin.ModelAdmin):
+@admin.register(ParentProfile)
+class ParentProfileAdmin(admin.ModelAdmin):
     list_display = ['user']
 
 
-@admin.register(PerfilEstudiante)
-class PerfilEstudianteAdmin(admin.ModelAdmin):
-    list_display = ['user', 'institucion', 'padre']
+@admin.register(StudentProfile)
+class StudentProfileAdmin(admin.ModelAdmin):
+    list_display = ['user', 'institution', 'parent']

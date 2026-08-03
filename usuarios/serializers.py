@@ -1,13 +1,18 @@
+import secrets
+import string
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
+from django.contrib.auth.tokens import default_token_generator
 from django.db import transaction
-from .models import Institucion, PerfilPadre, PerfilEstudiante
+from django.utils.translation import gettext_lazy as _
+from .models import Institution, ParentProfile, StudentProfile
 
 User = get_user_model()
 
-class PadreRegistroSerializer(serializers.ModelSerializer):
-    # Serializador (Patrón DTO): Abstrae la capa de base de datos para el registro del Padre de Familia.
-    # Expone de forma segura los datos de entrada, validando que el correo electrónico sea el identificador principal.
+
+class ParentRegistrationSerializer(serializers.ModelSerializer):
+    # Serializer (DTO Pattern): abstracts the database layer for Parent registration.
+    # Safely exposes input data, validating that email is the primary identifier.
     password = serializers.CharField(write_only=True, required=True, style={'input_type': 'password'})
 
     class Meta:
@@ -21,83 +26,121 @@ class PadreRegistroSerializer(serializers.ModelSerializer):
 
     @transaction.atomic
     def create(self, validated_data: dict) -> User:
-        # Usamos el email como username temporal para satisfacer AbstractUser
         user = User.objects.create_user(
             username=validated_data['email'],
             email=validated_data['email'],
             password=validated_data['password'],
             first_name=validated_data['first_name'],
             last_name=validated_data['last_name'],
-            rol=User.Role.PADRE
+            role=User.Role.PARENT
         )
-        # Crear automáticamente el perfil vinculado
-        PerfilPadre.objects.create(user=user)
+        ParentProfile.objects.create(user=user)
         return user
 
 
-class EstudianteRegistroSerializer(serializers.ModelSerializer):
-    # Serializador (Patrón DTO): Procesa el registro del Estudiante por parte de un Padre.
-    # Gestiona la carga de archivos (foto_perfil) y asegura la integridad referencial obligatoria (Institución).
+class StudentRegistrationSerializer(serializers.ModelSerializer):
+    # Serializer (DTO Pattern): processes Student registration performed by a Parent.
+    # Handles file upload (profile_picture) and enforces mandatory referential integrity (Institution).
     password = serializers.CharField(write_only=True, required=True, style={'input_type': 'password'})
-    institucion_id = serializers.PrimaryKeyRelatedField(
-        queryset=Institucion.objects.all(), source='institucion', write_only=True
+    institution_id = serializers.PrimaryKeyRelatedField(
+        queryset=Institution.objects.all(), source='institution', write_only=True
     )
-    foto_perfil = serializers.ImageField(write_only=True, required=True)
-    
+    profile_picture = serializers.ImageField(write_only=True, required=True)
+
     class Meta:
         model = User
-        fields = ('username', 'password', 'first_name', 'last_name', 'institucion_id', 'foto_perfil')
-        
+        fields = ('username', 'password', 'first_name', 'last_name', 'institution_id', 'profile_picture')
+
     @transaction.atomic
     def create(self, validated_data: dict) -> User:
-        institucion = validated_data.pop('institucion')
-        foto_perfil = validated_data.pop('foto_perfil')
-        
-        # El padre creador se inyecta desde la vista mediante context
+        institution = validated_data.pop('institution')
+        profile_picture = validated_data.pop('profile_picture')
+
         request = self.context.get('request')
-        if not request or not hasattr(request.user, 'perfil_padre'):
-            raise serializers.ValidationError("Solo un Padre de familia puede registrar a un estudiante.")
-            
-        padre_perfil = request.user.perfil_padre
-        
-        # Generamos un email dummy o nulo si no es obligatorio en base de datos.
-        # Para AbstractUser, el email no es strictamente requerido unique a menos que se fuerce, 
-        # pero en nuestro modelo pusimos email unique=True. Generamos uno ficticio basado en el username para cumplir la restricción.
-        email_generado = f"{validated_data['username']}@estudiante.local"
-        
+        if not request or not hasattr(request.user, 'parent_profile'):
+            raise serializers.ValidationError(_('Solo un Padre de Familia puede registrar a un estudiante.'))
+
+        parent_profile = request.user.parent_profile
+        generated_email = f"{validated_data['username']}@student.local"
+
         user = User.objects.create_user(
             username=validated_data['username'],
-            email=email_generado,
+            email=generated_email,
             password=validated_data['password'],
             first_name=validated_data.get('first_name', ''),
             last_name=validated_data.get('last_name', ''),
-            rol=User.Role.ESTUDIANTE
+            role=User.Role.STUDENT
         )
-        
-        PerfilEstudiante.objects.create(
+
+        StudentProfile.objects.create(
             user=user,
-            institucion=institucion,
-            foto_perfil=foto_perfil,
-            padre=padre_perfil
+            institution=institution,
+            profile_picture=profile_picture,
+            parent=parent_profile
         )
-        
+
         return user
 
 
-class SolicitudRecuperacionSerializer(serializers.Serializer):
-    # Serializador (Patrón DTO): Valida que exista un usuario activo asociado al correo provisto.
-    # Al buscar en el modelo unificado User, el alcance es transversal a todos los roles.
+def generate_temporary_password(length=12):
+    characters = string.ascii_letters + string.digits
+    return ''.join(secrets.choice(characters) for _ in range(length))
+
+
+class CreateStaffSerializer(serializers.ModelSerializer):
+    """
+    Serializer for the Administrator to create Teacher or Operations Staff
+    accounts within their own location.
+    """
+    role = serializers.ChoiceField(
+        choices=[(User.Role.TEACHER, _('Docente')), (User.Role.OPERATIONS_STAFF, _('Personal Operativo'))]
+    )
+
+    class Meta:
+        model = User
+        fields = ('email', 'first_name', 'last_name', 'role')
+        extra_kwargs = {
+            'email': {'required': True},
+            'first_name': {'required': True},
+            'last_name': {'required': True},
+        }
+
+    @transaction.atomic
+    def create(self, validated_data: dict) -> User:
+        request = self.context.get('request')
+        admin = request.user
+
+        temporary_password = generate_temporary_password()
+
+        user = User.objects.create_user(
+            username=validated_data['email'],
+            email=validated_data['email'],
+            password=temporary_password,
+            first_name=validated_data['first_name'],
+            last_name=validated_data['last_name'],
+            role=validated_data['role'],
+            location=admin.location,
+            must_change_password=True,
+        )
+
+        user._temporary_password = temporary_password
+        return user
+
+
+class PasswordResetRequestSerializer(serializers.Serializer):
+    # Serializer (DTO Pattern): validates that an active user exists for the given email.
+    # Since it searches the unified User model, its scope spans all roles.
     email = serializers.EmailField()
 
     def validate_email(self, value: str) -> str:
         if not User.objects.filter(email=value, is_active=True).exists():
-            raise serializers.ValidationError("No existe un usuario activo con este correo electrónico.")
+            raise serializers.ValidationError(_('No existe un usuario activo con este correo electrónico.'))
         return value
 
 
-class ConfirmacionRecuperacionSerializer(serializers.Serializer):
-    # Serializador (Patrón DTO): Valida la integridad y vigencia temporal del token nativo de Django,
-    # procesando el cifrado de la nueva contraseña.
+class PasswordResetConfirmSerializer(serializers.Serializer):
+    # Serializer (DTO Pattern): validates the integrity and time validity of Django's
+    # native token, and processes the encryption of the new password.
     email = serializers.EmailField()
     token = serializers.CharField()
     new_password = serializers.CharField(write_only=True, required=True, style={'input_type': 'password'})
@@ -105,24 +148,22 @@ class ConfirmacionRecuperacionSerializer(serializers.Serializer):
     def validate(self, attrs: dict) -> dict:
         email = attrs.get('email')
         token = attrs.get('token')
-        
+
         try:
             user = User.objects.get(email=email, is_active=True)
         except User.DoesNotExist:
-            raise serializers.ValidationError("Usuario no encontrado.")
+            raise serializers.ValidationError(_('Usuario no encontrado.'))
 
-        from django.contrib.auth.tokens import default_token_generator
         if not default_token_generator.check_token(user, token):
-            raise serializers.ValidationError("El token es inválido o ha expirado.")
-            
+            raise serializers.ValidationError(_('El token es inválido o ha expirado.'))
+
         attrs['user'] = user
         return attrs
 
     @transaction.atomic
     def save(self, **kwargs):
         user = self.validated_data['user']
-        # set_password garantiza el encriptado nativo en PostgreSQL (cumplimiento RF-03)
         user.set_password(self.validated_data['new_password'])
+        user.must_change_password = False
         user.save()
         return user
-

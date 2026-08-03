@@ -1,39 +1,39 @@
 from rest_framework.test import APITestCase
-from .models import CustomUser, Sede
+from .models import CustomUser, Location
 
 
-class AislamientoSedeTests(APITestCase):
+class LocationIsolationTests(APITestCase):
     def setUp(self):
-        self.sede_a = Sede.objects.create(nombre="Martim Cereré")
-        self.sede_b = Sede.objects.create(nombre="El Sauce")
+        self.location_a = Location.objects.create(name="Martim Cereré")
+        self.location_b = Location.objects.create(name="El Sauce")
         self.admin_a = CustomUser.objects.create_user(
             username="admin_a", email="admin_a@delycattessen.com",
-            password="test1234", rol=CustomUser.Role.ADMIN, sede=self.sede_a
+            password="test1234", role=CustomUser.Role.ADMIN, location=self.location_a
         )
-        self.operativo_b = CustomUser.objects.create_user(
-            username="operativo_b", email="operativo_b@delycattessen.com",
-            password="test1234", rol=CustomUser.Role.PERSONAL_OPERATIVO, sede=self.sede_b
+        self.staff_b = CustomUser.objects.create_user(
+            username="staff_b", email="staff_b@delycattessen.com",
+            password="test1234", role=CustomUser.Role.OPERATIONS_STAFF, location=self.location_b
         )
 
-    def test_usuarios_pertenecen_a_su_sede_correspondiente(self):
-        self.assertEqual(self.admin_a.sede, self.sede_a)
-        self.assertNotEqual(self.admin_a.sede, self.operativo_b.sede)
+    def test_users_belong_to_their_corresponding_location(self):
+        self.assertEqual(self.admin_a.location, self.location_a)
+        self.assertNotEqual(self.admin_a.location, self.staff_b.location)
 
-    def test_administrador_no_ve_personal_de_otra_sede(self):
-        from .mixins import AislamientoPorSedeMixin
+    def test_administrator_does_not_see_staff_from_another_location(self):
+        from .mixins import LocationIsolationMixin
 
-        class VistaFalsa:
+        class FakeView:
             def __init__(self, request):
                 self.request = request
             def get_queryset(self):
-                return CustomUser.objects.filter(rol=CustomUser.Role.PERSONAL_OPERATIVO)
+                return CustomUser.objects.filter(role=CustomUser.Role.OPERATIONS_STAFF)
 
-        class VistaConMixin(AislamientoPorSedeMixin, VistaFalsa):
+        class ViewWithMixin(LocationIsolationMixin, FakeView):
             pass
 
-        class RequestFalso:
+        class FakeRequest:
             user = self.admin_a
 
-        vista = VistaConMixin(RequestFalso())
-        resultado = vista.get_queryset()
-        self.assertNotIn(self.operativo_b, resultado)
+        view = ViewWithMixin(FakeRequest())
+        result = view.get_queryset()
+        self.assertNotIn(self.staff_b, result)

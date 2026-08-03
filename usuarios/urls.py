@@ -1,14 +1,19 @@
 from django.urls import path
+from rest_framework.routers import DefaultRouter
 from .views import (
-    RegistroPadreView, 
-    RegistroEstudianteView,
-    SolicitarRecuperacionView,
-    ConfirmarRecuperacionView
+    ParentRegistrationView,
+    StudentRegistrationView,
+    StaffViewSet,
+    RequestPasswordResetView,
+    ConfirmPasswordResetView,
 )
 
+router = DefaultRouter()
+router.register('staff', StaffViewSet, basename='staff')
+
 urlpatterns = [
-    path('registro-padre/', RegistroPadreView.as_view(), name='registro_padre'),
-    path('registro-estudiante/', RegistroEstudianteView.as_view(), name='registro_estudiante'),
-    path('recuperar-password/solicitar/', SolicitarRecuperacionView.as_view(), name='recuperar_password_solicitar'),
-    path('recuperar-password/confirmar/', ConfirmarRecuperacionView.as_view(), name='recuperar_password_confirmar'),
-]
+    path('parent-registration/', ParentRegistrationView.as_view(), name='parent_registration'),
+    path('student-registration/', StudentRegistrationView.as_view(), name='student_registration'),
+    path('password-reset/request/', RequestPasswordResetView.as_view(), name='password_reset_request'),
+    path('password-reset/confirm/', ConfirmPasswordResetView.as_view(), name='password_reset_confirm'),
+] + router.urls
