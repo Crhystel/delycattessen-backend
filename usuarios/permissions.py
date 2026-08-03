@@ -8,7 +8,10 @@ class SameInstitutionPermission(BasePermission):
     def has_object_permission(self, request, view, obj):
         if not hasattr(obj, 'institution'):
             return True
-        return obj.institution_id == request.user.institution_id
+        user = request.user
+        if user.role == user.Role.ADMIN:
+            return True
+        return obj.institution_id == user.institution_id
 
 
 class IsAdministrator(BasePermission):

@@ -13,7 +13,7 @@ from .serializers import (
     PasswordResetConfirmSerializer,
 )
 from .permissions import IsAdministrator, SameInstitutionPermission, CanRequestPasswordReset
-from .mixins import InstitutionIsolationMixin, TokenGeneratorMixin
+from .mixins import InstitutionScopeMixin, TokenGeneratorMixin
 from .models import CustomUser
 
 
@@ -50,10 +50,10 @@ class StudentRegistrationView(generics.CreateAPIView):
         )
 
 
-class StaffViewSet(InstitutionIsolationMixin, ModelViewSet):
+class StaffViewSet(InstitutionScopeMixin, ModelViewSet):
     """
     Allows the Administrator to create, list, and view staff
-    (Teachers and Operations Staff) at their own institution.
+    (Teachers and Operations Staff), with cross-institution scope.
     """
     serializer_class = CreateStaffSerializer
     permission_classes = [IsAuthenticated, IsAdministrator, SameInstitutionPermission]
@@ -69,6 +69,7 @@ class StaffViewSet(InstitutionIsolationMixin, ModelViewSet):
             {
                 "mensaje": f"{user.get_role_display()} creado exitosamente.",
                 "email": user.email,
+                "institucion": user.institution.name,
                 "password_temporal": user._temporary_password,
                 "nota": str(_('El usuario deberá cambiar esta contraseña en su primer inicio de sesión.'))
             },

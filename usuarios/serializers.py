@@ -86,15 +86,20 @@ def generate_temporary_password(length=12):
 class CreateStaffSerializer(serializers.ModelSerializer):
     """
     Serializer for the Administrator to create Teacher or Operations Staff
-    accounts within their own institution.
+    accounts. By default, the account is created under the requesting
+    Administrator's own institution, but a different institution_id can
+    be specified explicitly (cross-institution management).
     """
     role = serializers.ChoiceField(
         choices=[(User.Role.TEACHER, _('Docente')), (User.Role.OPERATIONS_STAFF, _('Personal Operativo'))]
     )
+    institution_id = serializers.PrimaryKeyRelatedField(
+        queryset=Institution.objects.all(), source='institution', write_only=True, required=False
+    )
 
     class Meta:
         model = User
-        fields = ('email', 'first_name', 'last_name', 'role')
+        fields = ('email', 'first_name', 'last_name', 'role', 'institution_id')
         extra_kwargs = {
             'email': {'required': True},
             'first_name': {'required': True},
@@ -106,6 +111,7 @@ class CreateStaffSerializer(serializers.ModelSerializer):
         request = self.context.get('request')
         admin = request.user
 
+        institution = validated_data.pop('institution', None) or admin.institution
         temporary_password = generate_temporary_password()
 
         user = User.objects.create_user(
@@ -115,7 +121,7 @@ class CreateStaffSerializer(serializers.ModelSerializer):
             first_name=validated_data['first_name'],
             last_name=validated_data['last_name'],
             role=validated_data['role'],
-            institution=admin.institution,
+            institution=institution,
             must_change_password=True,
         )
 
