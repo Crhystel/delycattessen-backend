@@ -53,3 +53,12 @@ class InstitutionScopeTests(APITestCase):
         """Caso negativo: sin token, se rechaza con 401."""
         response = self.client.get('/api/usuarios/staff/')
         self.assertEqual(response.status_code, 401)
+        
+    def test_admin_can_list_institutions(self):
+        """Caso: admin obtiene la lista de instituciones para el selector."""
+        self._auth(self.admin_a)
+        response = self.client.get('/api/usuarios/institutions/')
+        self.assertEqual(response.status_code, 200)
+        names = [item['name'] for item in response.data]
+        self.assertIn(self.institution_a.name, names)
+        self.assertIn(self.institution_b.name, names)

@@ -165,3 +165,8 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
         user.must_change_password = False
         user.save()
         return user
+    
+class InstitutionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Institution
+        fields = ('id', 'name')

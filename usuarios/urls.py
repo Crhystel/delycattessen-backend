@@ -6,6 +6,7 @@ from .views import (
     StaffViewSet,
     RequestPasswordResetView,
     ConfirmPasswordResetView,
+    InstitutionListView,
 )
 
 router = DefaultRouter()
@@ -16,4 +17,5 @@ urlpatterns = [
     path('student-registration/', StudentRegistrationView.as_view(), name='student_registration'),
     path('password-reset/request/', RequestPasswordResetView.as_view(), name='password_reset_request'),
     path('password-reset/confirm/', ConfirmPasswordResetView.as_view(), name='password_reset_confirm'),
+    path('institutions/', InstitutionListView.as_view(), name='institution_list'),
 ] + router.urls

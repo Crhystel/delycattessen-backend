@@ -11,10 +11,11 @@ from .serializers import (
     CreateStaffSerializer,
     PasswordResetRequestSerializer,
     PasswordResetConfirmSerializer,
+    InstitutionSerializer,
 )
 from .permissions import IsAdministrator, SameInstitutionPermission, CanRequestPasswordReset
 from .mixins import InstitutionScopeMixin, TokenGeneratorMixin
-from .models import CustomUser
+from .models import CustomUser, Institution
 
 
 class ParentRegistrationView(generics.CreateAPIView):
@@ -75,7 +76,15 @@ class StaffViewSet(InstitutionScopeMixin, ModelViewSet):
             },
             status=status.HTTP_201_CREATED
         )
-
+class InstitutionListView(generics.ListAPIView):
+    """
+    Read-only endpoint that lists all institutions. Used by the
+    Administrator's frontend to populate the institution selector
+    for cross-institution scope.
+    """
+    serializer_class = InstitutionSerializer
+    permission_classes = [IsAuthenticated, IsAdministrator]
+    queryset = Institution.objects.all().order_by('name')
 
 class BasePasswordResetView(generics.GenericAPIView):
     permission_classes = [CanRequestPasswordReset]
