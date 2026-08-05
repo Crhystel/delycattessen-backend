@@ -155,3 +155,7 @@ SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(hours=1),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
 }
+AUTHENTICATION_BACKENDS = [
+    'usuarios.backends.EmailBackend',
+    'django.contrib.auth.backends.ModelBackend',
+]

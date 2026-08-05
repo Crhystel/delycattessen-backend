@@ -39,6 +39,7 @@ class CustomUser(AbstractUser):
         default=False,
         help_text=_('Verdadero para cuentas creadas por el Administrador (Docente/Personal Operativo)')
     )
+    EMAIL_FIELD = 'email'
 
     def __str__(self) -> str:
         return self.username

@@ -6,6 +6,7 @@ from django.contrib.auth.tokens import default_token_generator
 from django.db import transaction
 from django.utils.translation import gettext_lazy as _
 from .models import Institution, ParentProfile, StudentProfile
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 User = get_user_model()
 
@@ -170,3 +171,9 @@ class InstitutionSerializer(serializers.ModelSerializer):
     class Meta:
         model = Institution
         fields = ('id', 'name')
+        
+class EmailTokenObtainSerializer(TokenObtainPairSerializer):
+    username_field = User.EMAIL_FIELD
+    default_error_messages = {
+        'no_active_account': _('No existe una cuenta activa con las credenciales proporcionadas.')
+    }

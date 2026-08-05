@@ -16,6 +16,8 @@ from .serializers import (
 from .permissions import IsAdministrator, SameInstitutionPermission, CanRequestPasswordReset
 from .mixins import InstitutionScopeMixin, TokenGeneratorMixin
 from .models import CustomUser, Institution
+from rest_framework_simplejwt.views import TokenObtainPairView
+from .serializers import EmailTokenObtainSerializer
 
 
 class ParentRegistrationView(generics.CreateAPIView):
@@ -119,3 +121,6 @@ class ConfirmPasswordResetView(BasePasswordResetView):
 
     def process_recovery_action(self, serializer):
         serializer.save()
+        
+class EmailTokenObtainPairView(TokenObtainPairView):
+    serializer_class = EmailTokenObtainSerializer
