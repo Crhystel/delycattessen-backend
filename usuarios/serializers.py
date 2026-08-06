@@ -85,26 +85,27 @@ def generate_temporary_password(length=12):
 
 
 class CreateStaffSerializer(serializers.ModelSerializer):
-    """
-    Serializer for the Administrator to create Teacher or Operations Staff
-    accounts. By default, the account is created under the requesting
-    Administrator's own institution, but a different institution_id can
-    be specified explicitly (cross-institution management).
-    """
     role = serializers.ChoiceField(
         choices=[(User.Role.TEACHER, _('Docente')), (User.Role.OPERATIONS_STAFF, _('Personal Operativo'))]
     )
     institution_id = serializers.PrimaryKeyRelatedField(
         queryset=Institution.objects.all(), source='institution', write_only=True, required=False
     )
+    institution_name = serializers.CharField(source='institution.name', read_only=True)
 
     class Meta:
         model = User
-        fields = ('email', 'first_name', 'last_name', 'role', 'institution_id')
+        fields = (
+            'id', 'email', 'first_name', 'second_name', 'last_name', 'second_last_name',
+            'role', 'institution_id', 'institution_name', 'is_active',
+        )
         extra_kwargs = {
             'email': {'required': True},
             'first_name': {'required': True},
             'last_name': {'required': True},
+            'second_name': {'required': False},
+            'second_last_name': {'required': False},
+            'is_active': {'required': False},
         }
 
     @transaction.atomic
@@ -112,6 +113,7 @@ class CreateStaffSerializer(serializers.ModelSerializer):
         request = self.context.get('request')
         admin = request.user
 
+        validated_data.pop('is_active', None)
         institution = validated_data.pop('institution', None) or admin.institution
         temporary_password = generate_temporary_password()
 
@@ -120,7 +122,9 @@ class CreateStaffSerializer(serializers.ModelSerializer):
             email=validated_data['email'],
             password=temporary_password,
             first_name=validated_data['first_name'],
+            second_name=validated_data.get('second_name', ''),
             last_name=validated_data['last_name'],
+            second_last_name=validated_data.get('second_last_name', ''),
             role=validated_data['role'],
             institution=institution,
             must_change_password=True,
@@ -166,12 +170,21 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
         user.must_change_password = False
         user.save()
         return user
-    
+
+
 class InstitutionSerializer(serializers.ModelSerializer):
     class Meta:
         model = Institution
         fields = ('id', 'name')
-        
+
+
+class MeSerializer(serializers.ModelSerializer):
+    institution_name = serializers.CharField(source='institution.name', read_only=True)
+    class Meta:
+        model = User
+        fields = ('id', 'email', 'first_name', 'last_name', 'role', 'institution', 'institution_name')
+
+
 class EmailTokenObtainSerializer(TokenObtainPairSerializer):
     username_field = User.EMAIL_FIELD
     default_error_messages = {

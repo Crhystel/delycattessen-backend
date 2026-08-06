@@ -12,6 +12,7 @@ from .serializers import (
     PasswordResetRequestSerializer,
     PasswordResetConfirmSerializer,
     InstitutionSerializer,
+    MeSerializer,
 )
 from .permissions import IsAdministrator, SameInstitutionPermission, CanRequestPasswordReset
 from .mixins import InstitutionScopeMixin, TokenGeneratorMixin
@@ -124,3 +125,10 @@ class ConfirmPasswordResetView(BasePasswordResetView):
         
 class EmailTokenObtainPairView(TokenObtainPairView):
     serializer_class = EmailTokenObtainSerializer
+    
+class MeView(generics.RetrieveAPIView):
+    serializer_class = MeSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_object(self):
+        return self.request.user

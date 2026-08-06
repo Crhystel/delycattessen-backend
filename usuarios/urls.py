@@ -7,6 +7,7 @@ from .views import (
     RequestPasswordResetView,
     ConfirmPasswordResetView,
     InstitutionListView,
+    MeView,
 )
 
 router = DefaultRouter()
@@ -18,4 +19,5 @@ urlpatterns = [
     path('password-reset/request/', RequestPasswordResetView.as_view(), name='password_reset_request'),
     path('password-reset/confirm/', ConfirmPasswordResetView.as_view(), name='password_reset_confirm'),
     path('institutions/', InstitutionListView.as_view(), name='institution_list'),
+    path('me/', MeView.as_view(), name='me'),
 ] + router.urls
