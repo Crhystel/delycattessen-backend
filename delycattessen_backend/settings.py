@@ -46,6 +46,7 @@ INSTALLED_APPS = [
     'perfiles',
     'reportes',
     'corsheaders',
+    'django_celery_results',
 ]
 
 MIDDLEWARE = [
@@ -159,3 +160,18 @@ AUTHENTICATION_BACKENDS = [
     'usuarios.backends.EmailBackend',
     'django.contrib.auth.backends.ModelBackend',
 ]
+# Celery / RabbitMQ configuration
+CELERY_BROKER_URL = config('RABBITMQ_URL', default='amqp://guest:guest@localhost:5672//')
+CELERY_RESULT_BACKEND = 'django-db'
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+
+# Email configuration 
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'smtp.gmail.com'
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = config('EMAIL_HOST_USER')
+EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD')
+DEFAULT_FROM_EMAIL = config('EMAIL_HOST_USER')
+                             

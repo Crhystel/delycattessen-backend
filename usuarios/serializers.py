@@ -4,6 +4,7 @@ from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
 from django.db import transaction
+from django.core.cache import cache
 from django.utils.translation import gettext_lazy as _
 from .models import Institution, ParentProfile, StudentProfile
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
@@ -145,20 +146,24 @@ class PasswordResetRequestSerializer(serializers.Serializer):
 
 class PasswordResetConfirmSerializer(serializers.Serializer):
     email = serializers.EmailField()
-    token = serializers.CharField()
+    code = serializers.CharField(max_length=6, min_length=6)
     new_password = serializers.CharField(write_only=True, required=True, style={'input_type': 'password'})
+    confirm_password = serializers.CharField(write_only=True, required=True, style={'input_type': 'password'})
 
     def validate(self, attrs: dict) -> dict:
         email = attrs.get('email')
-        token = attrs.get('token')
+        code = attrs.get('code')
+        if attrs['new_password'] != attrs['confirm_password']:
+            raise serializers.ValidationError(_('Las contraseñas no coinciden.'))
+
+        cached_code = cache.get(f"password_reset_code:{email}")
+        if cached_code is None or cached_code != code:
+            raise serializers.ValidationError(_('El código es inválido o ha expirado.'))
 
         try:
             user = User.objects.get(email=email, is_active=True)
         except User.DoesNotExist:
             raise serializers.ValidationError(_('Usuario no encontrado.'))
-
-        if not default_token_generator.check_token(user, token):
-            raise serializers.ValidationError(_('El token es inválido o ha expirado.'))
 
         attrs['user'] = user
         return attrs
@@ -166,9 +171,11 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
     @transaction.atomic
     def save(self, **kwargs):
         user = self.validated_data['user']
+        email = self.validated_data['email']
         user.set_password(self.validated_data['new_password'])
         user.must_change_password = False
         user.save()
+        cache.delete(f"password_reset_code:{email}")
         return user
 
 

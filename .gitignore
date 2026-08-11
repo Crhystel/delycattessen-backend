@@ -32,6 +32,9 @@ media/
 .idea/
 *.swp
 
+# Configuración local de Claude Code (skills/estándares personales, no compartidos)
+.claude/
+
 # Sistema operativo
 .DS_Store
 Thumbs.db

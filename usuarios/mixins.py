@@ -1,4 +1,8 @@
+import random
+from django.core.cache import cache
 from django.contrib.auth.tokens import default_token_generator
+
+CODE_TTL_SECONDS = 900 #15 minutos
 
 
 class InstitutionScopeMixin:
@@ -37,9 +41,8 @@ class TokenGeneratorMixin:
     requires this behavior.
     """
     def generate_and_send_token(self, user, email: str) -> None:
-        token = default_token_generator.make_token(user)
-
-        # Simulación de envío de correo en la consola
-        print(f"\n{'='*50}\nSIMULACIÓN DE CORREO A: {email}")
-        print(f"Tu código/token de seguridad es: {token}")
-        print(f"Este código es de uso único y tiene vigencia limitada.\n{'='*50}\n")
+        code = f"{random.randint(0,999999):06d}"
+        cache.set(f"password_reset_code:{email}", code, timeout=CODE_TTL_SECONDS)
+        from .tasks import send_password_reset_email
+        send_password_reset_email.delay(email, code)
+        
