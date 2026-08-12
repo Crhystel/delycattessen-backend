@@ -53,7 +53,9 @@ class ParentProfile(models.Model):
     )
 
     def __str__(self) -> str:
-        return f"Perfil de Padre: {self.user.get_full_name() or self.user.username}"
+        return str(_('Perfil de Padre: %(name)s')) % {
+            'name': self.user.get_full_name() or self.user.username
+        }
 
     class Meta:
         verbose_name = _('parent profile')
@@ -75,7 +77,7 @@ class StudentProfile(models.Model):
     )
 
     def __str__(self) -> str:
-        return f"Perfil de Estudiante: {self.user.username}"
+        return str(_('Perfil de Estudiante: %(username)s')) % {'username': self.user.username}
 
     class Meta:
         verbose_name = _('student profile')

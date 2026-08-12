@@ -16,12 +16,12 @@ Backend del sistema de gestión de ventas y control de servicios alimentarios de
 
 El backend está organizado en 6 apps, cada una correspondiente a un módulo del sistema:
 
-- `usuarios` - Gestión de acceso, registro y perfil de usuario
-- `catalogo` - Catálogo de productos e inventario
-- `billetera` - Billetera digital y recargas autónomas
-- `perfiles` - Control parental y gestión de alérgenos
-- `punto_venta` - Identificación biométrica, QR y procesamiento de cobros
-- `reportes` - Analítica automatizada de ventas
+- `users` - Gestión de acceso, registro y perfil de usuario
+- `catalog` - Catálogo de productos e inventario
+- `wallet` - Billetera digital y recargas autónomas
+- `profiles` - Control parental y gestión de alérgenos
+- `pos` - Identificación biométrica, QR y procesamiento de cobros
+- `reports` - Analítica automatizada de ventas
 
 ## Requisitos previos
 

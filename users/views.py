@@ -31,7 +31,7 @@ class ParentRegistrationView(generics.CreateAPIView):
         self.perform_create(serializer)
         headers = self.get_success_headers(serializer.data)
         return Response(
-            {"mensaje": str(_('Padre registrado exitosamente.')), "email": serializer.data.get("email")},
+            {"message": str(_('Padre registrado exitosamente.')), "email": serializer.data.get("email")},
             status=status.HTTP_201_CREATED,
             headers=headers
         )
@@ -48,7 +48,7 @@ class StudentRegistrationView(generics.CreateAPIView):
         self.perform_create(serializer)
         headers = self.get_success_headers(serializer.data)
         return Response(
-            {"mensaje": str(_('Estudiante registrado exitosamente.')), "username": serializer.data.get("username")},
+            {"message": str(_('Estudiante registrado exitosamente.')), "username": serializer.data.get("username")},
             status=status.HTTP_201_CREATED,
             headers=headers
         )
@@ -71,11 +71,11 @@ class StaffViewSet(InstitutionScopeMixin, ModelViewSet):
         user = serializer.save()
         return Response(
             {
-                "mensaje": f"{user.get_role_display()} creado exitosamente.",
+                "message": str(_('%(role)s creado exitosamente.')) % {'role': user.get_role_display()},
                 "email": user.email,
-                "institucion": user.institution.name,
-                "password_temporal": user._temporary_password,
-                "nota": str(_('El usuario deberá cambiar esta contraseña en su primer inicio de sesión.'))
+                "institution": user.institution.name,
+                "temporary_password": user._temporary_password,
+                "note": str(_('El usuario deberá cambiar esta contraseña en su primer inicio de sesión.'))
             },
             status=status.HTTP_201_CREATED
         )
@@ -101,7 +101,7 @@ class BasePasswordResetView(generics.GenericAPIView):
         serializer.is_valid(raise_exception=True)
         self.process_recovery_action(serializer)
         return Response(
-            {"mensaje": str(self.success_message)},
+            {"message": str(self.success_message)},
             status=status.HTTP_200_OK
         )
 

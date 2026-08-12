@@ -1,6 +1,6 @@
-#Pruebas Unitarias
+#Unit tests
 from django.test import TestCase
-from usuarios.models import CustomUser, Institution
+from users.models import CustomUser, Institution
 
 
 class InstitutionModelTests(TestCase):

@@ -1,7 +1,7 @@
-#Pruebas de integración del alcance por institución en el endpoint de Staff.
+#Integration tests for institution scoping on the Staff endpoint.
 from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
-from usuarios.models import CustomUser, Institution
+from users.models import CustomUser, Institution
 
 
 class InstitutionScopeTests(APITestCase):
@@ -26,38 +26,38 @@ class InstitutionScopeTests(APITestCase):
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token.access_token}')
 
     def test_admin_default_view_shows_own_institution_only(self):
-        """Caso: admin sin parámetro ve solo su institución por defecto."""
+        """Case: admin with no parameter sees only their own institution by default."""
         self._auth(self.admin_a)
-        response = self.client.get('/api/usuarios/staff/')
+        response = self.client.get('/api/users/staff/')
         emails = [item['email'] for item in response.data]
         self.assertIn(self.staff_a.email, emails)
         self.assertNotIn(self.staff_b.email, emails)
 
     def test_admin_can_view_another_institution_explicitly(self):
-        """Caso: admin solicita explícitamente otra institución."""
+        """Case: admin explicitly requests another institution."""
         self._auth(self.admin_a)
-        response = self.client.get(f'/api/usuarios/staff/?institution={self.institution_b.id}')
+        response = self.client.get(f'/api/users/staff/?institution={self.institution_b.id}')
         emails = [item['email'] for item in response.data]
         self.assertIn(self.staff_b.email, emails)
         self.assertNotIn(self.staff_a.email, emails)
 
     def test_admin_can_view_consolidated_across_institutions(self):
-        """Caso: admin solicita vista consolidada de todas las instituciones."""
+        """Case: admin requests a consolidated view across all institutions."""
         self._auth(self.admin_a)
-        response = self.client.get('/api/usuarios/staff/?institution=all')
+        response = self.client.get('/api/users/staff/?institution=all')
         emails = [item['email'] for item in response.data]
         self.assertIn(self.staff_a.email, emails)
         self.assertIn(self.staff_b.email, emails)
 
     def test_unauthenticated_request_is_rejected(self):
-        """Caso negativo: sin token, se rechaza con 401."""
-        response = self.client.get('/api/usuarios/staff/')
+        """Negative case: without a token, the request is rejected with 401."""
+        response = self.client.get('/api/users/staff/')
         self.assertEqual(response.status_code, 401)
-        
+
     def test_admin_can_list_institutions(self):
-        """Caso: admin obtiene la lista de instituciones para el selector."""
+        """Case: admin gets the institution list for the selector."""
         self._auth(self.admin_a)
-        response = self.client.get('/api/usuarios/institutions/')
+        response = self.client.get('/api/users/institutions/')
         self.assertEqual(response.status_code, 200)
         names = [item['name'] for item in response.data]
         self.assertIn(self.institution_a.name, names)

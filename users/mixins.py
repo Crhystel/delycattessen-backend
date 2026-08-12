@@ -2,7 +2,7 @@ import random
 from django.core.cache import cache
 from django.contrib.auth.tokens import default_token_generator
 
-CODE_TTL_SECONDS = 900 #15 minutos
+CODE_TTL_SECONDS = 900  # 15 minutes
 
 
 class InstitutionScopeMixin:

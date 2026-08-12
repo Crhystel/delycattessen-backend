@@ -39,12 +39,12 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework',
     'rest_framework_simplejwt',
-    'usuarios',
-    'catalogo',
-    'billetera',
-    'punto_venta',
-    'perfiles',
-    'reportes',
+    'users',
+    'catalog',
+    'wallet',
+    'pos',
+    'profiles',
+    'reports',
     'corsheaders',
     'django_celery_results',
 ]
@@ -136,13 +136,13 @@ USE_TZ = True
 STATIC_URL = 'static/'
 
 # Custom User Model
-AUTH_USER_MODEL = 'usuarios.CustomUser'
+AUTH_USER_MODEL = 'users.CustomUser'
 
 # Media files (Profile pictures, etc.)
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
-# Configuración de vigencia de token de recuperación de contraseña (15 minutos = 900 segundos)
+# Password reset code validity (15 minutes = 900 seconds)
 PASSWORD_RESET_TIMEOUT = 900
  
 from datetime import timedelta
@@ -157,7 +157,7 @@ SIMPLE_JWT = {
     'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
 }
 AUTHENTICATION_BACKENDS = [
-    'usuarios.backends.EmailBackend',
+    'users.backends.EmailBackend',
     'django.contrib.auth.backends.ModelBackend',
 ]
 # Celery / RabbitMQ configuration
