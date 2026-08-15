@@ -1,5 +1,6 @@
 from rest_framework.permissions import BasePermission
 from django.utils.translation import gettext_lazy as _
+from .models import CustomUser
 
 
 class SameInstitutionPermission(BasePermission):
@@ -33,3 +34,10 @@ class CanRequestPasswordReset(BasePermission):
     """
     def has_permission(self, request, view):
         return True
+
+class IsParentUser(BasePermission):
+    """Only CustomUser with role PARENT can access the endpoint."""
+    message = 'Solo un padre de familia puede registrar estudiantes.'
+    def has_permission(self, request, view):
+        return bool( request.user and request.user.is_authenticated and request.user.role == CustomUser.Role.PARENT
+        )

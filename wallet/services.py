@@ -9,6 +9,7 @@ from .models import Transaction, Wallet
 
 
 class GatewayError(Exception):
+    pass
 
 
 class PaymentGateway(ABC):

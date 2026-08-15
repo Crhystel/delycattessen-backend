@@ -8,7 +8,9 @@ from .views import (
     ConfirmPasswordResetView,
     InstitutionListView,
     MeView,
+    EmailTokenObtainPairView,
 )
+from rest_framework_simplejwt.views import TokenRefreshView
 
 router = DefaultRouter()
 router.register('staff', StaffViewSet, basename='staff')
@@ -20,4 +22,6 @@ urlpatterns = [
     path('password-reset/confirm/', ConfirmPasswordResetView.as_view(), name='password_reset_confirm'),
     path('institutions/', InstitutionListView.as_view(), name='institution_list'),
     path('me/', MeView.as_view(), name='me'),
+    path('login/', EmailTokenObtainPairView.as_view(), name='login'),
+    path('login/refresh/', TokenRefreshView.as_view(), name='login-refresh'),
 ] + router.urls

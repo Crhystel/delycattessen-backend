@@ -2,82 +2,15 @@ import secrets
 import string
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
+from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth.tokens import default_token_generator
 from django.db import transaction
 from django.core.cache import cache
 from django.utils.translation import gettext_lazy as _
-from .models import Institution, ParentProfile, StudentProfile
+from .models import Institution, ParentProfile, StudentProfile, CustomUser
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 User = get_user_model()
-
-
-class ParentRegistrationSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True, required=True, style={'input_type': 'password'})
-
-    class Meta:
-        model = User
-        fields = ('email', 'first_name', 'last_name', 'password')
-        extra_kwargs = {
-            'email': {'required': True},
-            'first_name': {'required': True},
-            'last_name': {'required': True},
-        }
-
-    @transaction.atomic
-    def create(self, validated_data: dict) -> User:
-        user = User.objects.create_user(
-            username=validated_data['email'],
-            email=validated_data['email'],
-            password=validated_data['password'],
-            first_name=validated_data['first_name'],
-            last_name=validated_data['last_name'],
-            role=User.Role.PARENT
-        )
-        ParentProfile.objects.create(user=user)
-        return user
-
-
-class StudentRegistrationSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True, required=True, style={'input_type': 'password'})
-    institution_id = serializers.PrimaryKeyRelatedField(
-        queryset=Institution.objects.all(), source='institution', write_only=True
-    )
-    profile_picture = serializers.ImageField(write_only=True, required=True)
-
-    class Meta:
-        model = User
-        fields = ('username', 'password', 'first_name', 'last_name', 'institution_id', 'profile_picture')
-
-    @transaction.atomic
-    def create(self, validated_data: dict) -> User:
-        institution = validated_data.pop('institution')
-        profile_picture = validated_data.pop('profile_picture')
-
-        request = self.context.get('request')
-        if not request or not hasattr(request.user, 'parent_profile'):
-            raise serializers.ValidationError(_('Solo un Padre de Familia puede registrar a un estudiante.'))
-
-        parent_profile = request.user.parent_profile
-        generated_email = f"{validated_data['username']}@student.local"
-
-        user = User.objects.create_user(
-            username=validated_data['username'],
-            email=generated_email,
-            password=validated_data['password'],
-            first_name=validated_data.get('first_name', ''),
-            last_name=validated_data.get('last_name', ''),
-            role=User.Role.STUDENT
-        )
-
-        StudentProfile.objects.create(
-            user=user,
-            institution=institution,
-            profile_picture=profile_picture,
-            parent=parent_profile
-        )
-
-        return user
 
 
 def generate_temporary_password(length=12):
@@ -187,13 +120,92 @@ class InstitutionSerializer(serializers.ModelSerializer):
 
 class MeSerializer(serializers.ModelSerializer):
     institution_name = serializers.CharField(source='institution.name', read_only=True)
+    has_children = serializers.SerializerMethodField()
+
     class Meta:
         model = User
-        fields = ('id', 'email', 'first_name', 'last_name', 'role', 'institution', 'institution_name')
+        fields = ('id', 'email', 'first_name', 'last_name', 'role', 'institution', 'institution_name', 'has_children')
+
+    def get_has_children(self, obj):
+        return hasattr(obj, 'parent_profile') and obj.parent_profile.children.exists()
 
 
 class EmailTokenObtainSerializer(TokenObtainPairSerializer):
-    username_field = User.EMAIL_FIELD
     default_error_messages = {
         'no_active_account': _('No existe una cuenta activa con las credenciales proporcionadas.')
     }
+
+class ParentRegistrationSerializer(serializers.Serializer):
+
+    email = serializers.EmailField()
+    password = serializers.CharField(write_only=True, validators=[validate_password])
+    password_confirm = serializers.CharField(write_only=True)
+
+    def validate_email(self, value):
+        if CustomUser.objects.filter(email__iexact=value).exists():
+            raise serializers.ValidationError('Ya existe una cuenta con este correo.')
+        return value
+
+    def validate(self, attrs):
+        if attrs['password'] != attrs['password_confirm']:
+            raise serializers.ValidationError({'password_confirm': 'Las contraseñas no coinciden.'})
+        return attrs
+
+    def create(self, validated_data):
+        email = validated_data['email']
+        username = self._generate_unique_username(email)
+        user = CustomUser.objects.create_user(
+            username=username,
+            email=email,
+            password=validated_data['password'],
+            role=CustomUser.Role.PARENT,
+        )
+        ParentProfile.objects.create(user=user)
+        return user
+
+    @staticmethod
+    def _generate_unique_username(email: str) -> str:
+        base = email.split('@')[0]
+        username = base
+        suffix = 1
+        while CustomUser.objects.filter(username=username).exists():
+            username = f'{base}{suffix}'
+            suffix += 1
+        return username
+    
+class StudentRegistrationSerializer(serializers.Serializer):
+    first_name = serializers.CharField(max_length=150)
+    second_name = serializers.CharField(max_length=150, required=False, allow_blank=True)
+    first_last_name = serializers.CharField(max_length=150)
+    second_last_name = serializers.CharField(max_length=150, required=False, allow_blank=True)
+    institution_id = serializers.PrimaryKeyRelatedField(
+        queryset=Institution.objects.all(), source='institution',
+    )
+    username = serializers.CharField(max_length=150)
+    password = serializers.CharField(write_only=True, validators=[validate_password])
+    profile_picture = serializers.ImageField()
+
+    def validate_username(self, value):
+        if CustomUser.objects.filter(username=value).exists():
+            raise serializers.ValidationError('Ese nombre de usuario ya está en uso.')
+        return value
+
+    def create(self, validated_data):
+        parent_profile = self.context['parent_profile']
+        institution = validated_data['institution']
+
+        student_user = CustomUser.objects.create_user(
+            username=validated_data['username'],
+            password=validated_data['password'],
+            first_name=validated_data['first_name'],
+            second_name=validated_data.get('second_name', ''),
+            last_name=validated_data['first_last_name'],
+            second_last_name=validated_data.get('second_last_name', ''),
+            role=CustomUser.Role.STUDENT,
+        )
+        return StudentProfile.objects.create(
+            user=student_user,
+            institution=institution,
+            profile_picture=validated_data['profile_picture'],
+            parent=parent_profile,
+        )

@@ -25,7 +25,7 @@ SECRET_KEY = 'django-insecure-5m_w6&i8^y3$____g41(eo8^dz&pbl+(@ki%ex3a_&*biaz!rp
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['*']
 
 
 # Application definition
@@ -174,7 +174,6 @@ EMAIL_USE_TLS = True
 EMAIL_HOST_USER = config('EMAIL_HOST_USER')
 EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD')
 DEFAULT_FROM_EMAIL = config('EMAIL_HOST_USER')
-INSTALLED_APPS += ['wallet']
 
 WALLET_USE_FAKE_GATEWAYS = config('WALLET_USE_FAKE_GATEWAYS', default=True, cast=bool)
 WALLET_RECHARGE_GATEWAY_THRESHOLD = config('WALLET_RECHARGE_GATEWAY_THRESHOLD', default=5.00, cast=float)

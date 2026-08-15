@@ -2,6 +2,7 @@ from rest_framework import generics, status
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.views import APIView
 from rest_framework.viewsets import ModelViewSet
 from django.contrib.auth import get_user_model
 from django.utils.translation import gettext_lazy as _
@@ -14,44 +15,12 @@ from .serializers import (
     InstitutionSerializer,
     MeSerializer,
 )
-from .permissions import IsAdministrator, SameInstitutionPermission, CanRequestPasswordReset
+from .permissions import IsAdministrator, IsParentUser, SameInstitutionPermission, CanRequestPasswordReset
 from .mixins import InstitutionScopeMixin, TokenGeneratorMixin
 from .models import CustomUser, Institution
 from rest_framework_simplejwt.views import TokenObtainPairView
+from rest_framework_simplejwt.tokens import RefreshToken
 from .serializers import EmailTokenObtainSerializer
-
-
-class ParentRegistrationView(generics.CreateAPIView):
-    serializer_class = ParentRegistrationSerializer
-    permission_classes = [AllowAny]
-
-    def create(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        self.perform_create(serializer)
-        headers = self.get_success_headers(serializer.data)
-        return Response(
-            {"message": str(_('Padre registrado exitosamente.')), "email": serializer.data.get("email")},
-            status=status.HTTP_201_CREATED,
-            headers=headers
-        )
-
-
-class StudentRegistrationView(generics.CreateAPIView):
-    serializer_class = StudentRegistrationSerializer
-    permission_classes = [IsAuthenticated]
-    parser_classes = [MultiPartParser, FormParser]
-
-    def create(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data, context={'request': request})
-        serializer.is_valid(raise_exception=True)
-        self.perform_create(serializer)
-        headers = self.get_success_headers(serializer.data)
-        return Response(
-            {"message": str(_('Estudiante registrado exitosamente.')), "username": serializer.data.get("username")},
-            status=status.HTTP_201_CREATED,
-            headers=headers
-        )
 
 
 class StaffViewSet(InstitutionScopeMixin, ModelViewSet):
@@ -80,13 +49,8 @@ class StaffViewSet(InstitutionScopeMixin, ModelViewSet):
             status=status.HTTP_201_CREATED
         )
 class InstitutionListView(generics.ListAPIView):
-    """
-    Read-only endpoint that lists all institutions. Used by the
-    Administrator's frontend to populate the institution selector
-    for cross-institution scope.
-    """
     serializer_class = InstitutionSerializer
-    permission_classes = [IsAuthenticated, IsAdministrator]
+    permission_classes = [IsAuthenticated]
     queryset = Institution.objects.all().order_by('name')
 
 class BasePasswordResetView(generics.GenericAPIView):
@@ -132,3 +96,34 @@ class MeView(generics.RetrieveAPIView):
 
     def get_object(self):
         return self.request.user
+    
+class ParentRegistrationView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = ParentRegistrationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+        refresh = RefreshToken.for_user(user)
+        return Response(
+            {'access': str(refresh.access_token), 'refresh': str(refresh)},
+            status=201,
+        )
+
+
+class StudentRegistrationView(APIView):
+    permission_classes = [IsAuthenticated, IsParentUser]
+    parser_classes = [MultiPartParser, FormParser]  
+
+    def post(self, request):
+        serializer = StudentRegistrationSerializer(
+            data=request.data,
+            context={'parent_profile': request.user.parent_profile},
+        )
+        serializer.is_valid(raise_exception=True)
+        student_profile = serializer.save()
+
+        return Response(
+            {'student_id': student_profile.id, 'username': student_profile.user.username},
+            status=201,
+        )
