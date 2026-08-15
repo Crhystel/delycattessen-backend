@@ -23,7 +23,7 @@ class CustomUser(AbstractUser):
         OPERATIONS_STAFF = 'OPERATIONS_STAFF', _('Personal Operativo')
         TEACHER = 'TEACHER', _('Docente')
 
-    email = models.EmailField(_('email address'), unique=True)
+    email = models.EmailField(_('email address'), unique=True, null=True, blank=True)
     second_name = models.CharField(_('second name'), max_length=150, blank=True)
     second_last_name = models.CharField(_('second last name'), max_length=150, blank=True)
     role = models.CharField(_('role'), max_length=20, choices=Role.choices, default=Role.STUDENT)

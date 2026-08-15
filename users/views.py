@@ -7,6 +7,7 @@ from rest_framework.viewsets import ModelViewSet
 from django.contrib.auth import get_user_model
 from django.utils.translation import gettext_lazy as _
 from .serializers import (
+    ChildSerializer,
     ParentRegistrationSerializer,
     StudentRegistrationSerializer,
     CreateStaffSerializer,
@@ -127,3 +128,10 @@ class StudentRegistrationView(APIView):
             {'student_id': student_profile.id, 'username': student_profile.user.username},
             status=201,
         )
+class ChildrenListView(generics.ListAPIView):
+
+    serializer_class = ChildSerializer
+    permission_classes = [IsAuthenticated, IsParentUser]
+
+    def get_queryset(self):
+        return self.request.user.parent_profile.children.all()

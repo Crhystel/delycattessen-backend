@@ -194,18 +194,36 @@ class StudentRegistrationSerializer(serializers.Serializer):
         parent_profile = self.context['parent_profile']
         institution = validated_data['institution']
 
-        student_user = CustomUser.objects.create_user(
+        student_user = CustomUser(
             username=validated_data['username'],
-            password=validated_data['password'],
+            email=None,
             first_name=validated_data['first_name'],
             second_name=validated_data.get('second_name', ''),
             last_name=validated_data['first_last_name'],
             second_last_name=validated_data.get('second_last_name', ''),
             role=CustomUser.Role.STUDENT,
         )
+        student_user.set_password(validated_data['password'])
+        student_user.save()
+
         return StudentProfile.objects.create(
             user=student_user,
             institution=institution,
             profile_picture=validated_data['profile_picture'],
             parent=parent_profile,
         )
+        
+class ChildSerializer(serializers.ModelSerializer):
+    first_name = serializers.CharField(source='user.first_name')
+    last_name = serializers.CharField(source='user.last_name')
+    institution_name = serializers.CharField(source='institution.name', read_only=True)
+    profile_picture = serializers.ImageField(read_only=True)
+    balance = serializers.SerializerMethodField()
+
+    class Meta:
+        model = StudentProfile
+        fields = ('id', 'first_name', 'last_name', 'institution_name', 'profile_picture', 'balance')
+
+    def get_balance(self, obj):
+        wallet = getattr(obj, 'wallet', None)
+        return str(wallet.balance) if wallet else None

@@ -1,6 +1,7 @@
 from django.urls import path
 from rest_framework.routers import DefaultRouter
 from .views import (
+    ChildrenListView,
     ParentRegistrationView,
     StudentRegistrationView,
     StaffViewSet,
@@ -24,4 +25,5 @@ urlpatterns = [
     path('me/', MeView.as_view(), name='me'),
     path('login/', EmailTokenObtainPairView.as_view(), name='login'),
     path('login/refresh/', TokenRefreshView.as_view(), name='login-refresh'),
+    path('children/', ChildrenListView.as_view(), name='children_list'),
 ] + router.urls
