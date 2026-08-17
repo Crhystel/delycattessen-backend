@@ -219,11 +219,17 @@ class ChildSerializer(serializers.ModelSerializer):
     institution_name = serializers.CharField(source='institution.name', read_only=True)
     profile_picture = serializers.ImageField(read_only=True)
     balance = serializers.SerializerMethodField()
+    wallet_id = serializers.SerializerMethodField()
 
     class Meta:
         model = StudentProfile
-        fields = ('id', 'first_name', 'last_name', 'institution_name', 'profile_picture', 'balance')
+        fields = ('id', 'first_name', 'last_name', 'institution_name', 'profile_picture', 'balance', 'wallet_id')
 
     def get_balance(self, obj):
         wallet = getattr(obj, 'wallet', None)
         return str(wallet.balance) if wallet else None
+    
+    def get_wallet_id(self, obj):
+        wallet= getattr(obj, 'wallet', None)
+        return wallet.id if wallet else None
+        
