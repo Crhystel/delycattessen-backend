@@ -1,20 +1,53 @@
+from django.http import HttpResponse
+from django.conf import settings
 from rest_framework import status
 from rest_framework.generics import get_object_or_404
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from django.conf import settings
-from django.http import HttpResponse
-
-from wallet.services import PayphonePreparer
 
 from .models import Wallet
 from .permissions import IsWalletOwnerParent
 from .serializers import RechargeRequestSerializer, TransactionSerializer
+from .services import PayphonePreparer
 from .tasks import process_recharge_task
 
 
+class PayphoneRedirectView(APIView):
+    """Intermediate page served from OUR OWN domain (the one registered in
+    Payphone Developer). Flutter's WebView opens this URL first, not
+    Payphone's directly, so the browser generates a valid Referer before
+    jumping to Payphone's checkout."""
+
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        target_url = request.query_params.get('target')
+        if not target_url:
+            return HttpResponse('Missing target parameter.', status=400)
+
+        html = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <meta name="referrer" content="strict-origin-when-cross-origin">
+        </head>
+        <body>
+          <script>window.location.replace({target_url!r});</script>
+        </body>
+        </html>
+        """
+        response = HttpResponse(html)
+        response['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+        return response
+
+
 class WalletRechargeView(APIView):
+    """POST /api/wallet/recharge/
+    Amount >= threshold -> Kushki, tokenized on the frontend, processed
+    async via Celery (RNF-05). Amount < threshold -> Payphone: returns a
+    payment_url to open in a WebView."""
 
     permission_classes = [IsAuthenticated, IsWalletOwnerParent]
 
@@ -26,9 +59,12 @@ class WalletRechargeView(APIView):
         self.check_object_permissions(request, wallet)
 
         amount = serializer.validated_data['amount']
+        kushki_token = serializer.validated_data.get('kushki_token')
+        document_number = serializer.validated_data.get('document_number')
+        phone_number = serializer.validated_data.get('phone_number')
 
         is_payphone_range = amount < settings.WALLET_RECHARGE_GATEWAY_THRESHOLD
-        if is_payphone_range and not settings.WALLET_USE_FAKE_GATEWAYS:
+        if is_payphone_range:
             result = PayphonePreparer().prepare(wallet, amount)
             return Response(
                 {
@@ -38,7 +74,12 @@ class WalletRechargeView(APIView):
                 status=status.HTTP_200_OK,
             )
 
-        process_recharge_task.delay(wallet.id, str(amount))
+        if not kushki_token:
+            return Response({'detail': 'Falta el token de Kushki.'}, status=400)
+
+        process_recharge_task.delay(
+            wallet.id, str(amount), kushki_token, document_number, phone_number,
+        )
         return Response(
             {'detail': 'Recharge request received, processing.'},
             status=status.HTTP_202_ACCEPTED,
@@ -62,8 +103,7 @@ class PayphoneCallbackView(APIView):
 
 
 class WalletTransactionListView(APIView):
-    """GET /api/wallet/<wallet_id>/transactions/ — para que Flutter haga
-    polling del estado mientras la recarga se procesa en background."""
+    """GET /api/wallet/<wallet_id>/transactions/"""
 
     permission_classes = [IsAuthenticated, IsWalletOwnerParent]
 
@@ -74,30 +114,3 @@ class WalletTransactionListView(APIView):
         transactions = wallet.transactions.all()[:10]
         serializer = TransactionSerializer(transactions, many=True)
         return Response(serializer.data)
-
-class PayphoneRedirectView(APIView):
-    """Intermediate page served from our domain to redirect to Payphone's payment page, 
-    with a strict referrer policy."""
-
-    permission_classes = [AllowAny]
-
-    def get(self, request):
-        target_url = request.query_params.get('target')
-        if not target_url:
-            return HttpResponse('Falta el parámetro target.', status=400)
-
-        html = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <meta charset="utf-8">
-          <meta name="referrer" content="strict-origin-when-cross-origin">
-        </head>
-        <body>
-          <script>window.location.replace({target_url!r});</script>
-        </body>
-        </html>
-        """
-        response = HttpResponse(html)
-        response['Referrer-Policy'] = 'strict-origin-when-cross-origin'
-        return response
