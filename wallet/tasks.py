@@ -3,13 +3,21 @@ from django.core.mail import EmailMultiAlternatives
 from django.template.loader import render_to_string
 from django.utils.html import strip_tags
 from celery import shared_task
-
+import zoneinfo
 from .models import Wallet
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=10)
-def process_recharge_task(self, wallet_id: int, amount: str, token: str = None,
-                            document_number: str = None, phone_number: str = None) -> None:
+def process_recharge_task(
+    self,
+    wallet_id: int,
+    amount: str,
+    token: str = None,
+    document_type: str = None,
+    document_number: str = None,
+    phone_number: str = None,
+) -> None:
+    """Processes payment confirmation asynchronously via RabbitMQ."""
     from decimal import Decimal
     from .services import GatewayError, GatewayRouter
 
@@ -18,7 +26,8 @@ def process_recharge_task(self, wallet_id: int, amount: str, token: str = None,
     try:
         gateway.process_recharge(
             wallet, Decimal(amount), token=token,
-            document_number=document_number, phone_number=phone_number,
+            document_type=document_type, document_number=document_number,
+            phone_number=phone_number,
         )
     except GatewayError as exc:
         raise self.retry(exc=exc)
@@ -35,6 +44,9 @@ def send_recharge_confirmation_email(self, transaction_id: int) -> None:
     if not parent_user.email:
         return  # nothing to send to
 
+    local_date = transaction.created_at.astimezone(zoneinfo.ZoneInfo('America/Guayaquil'))
+    formatted_date = local_date.strftime('%d/%m/%Y, %H:%M')
+
     context = {
         'parent_first_name': parent_user.first_name,
         'parent_last_name': parent_user.last_name,
@@ -43,7 +55,7 @@ def send_recharge_confirmation_email(self, transaction_id: int) -> None:
         'gateway': transaction.get_gateway_display(),
         'ticket_number': transaction.external_transaction_id,
         'reference': f'Recarga billetera #{transaction.wallet.id}',
-        'date': transaction.created_at,
+        'date': formatted_date,
     }
     html_content = render_to_string('emails/recharge_confirmation.html', context)
     text_content = strip_tags(html_content)

@@ -9,6 +9,7 @@ class RechargeRequestSerializer(serializers.Serializer):
     wallet_id = serializers.IntegerField()
     amount = serializers.DecimalField(max_digits=8, decimal_places=2, min_value=Decimal('0.01'))
     kushki_token = serializers.CharField(required=False, allow_blank=True)
+    document_type = serializers.CharField(required=False, allow_blank=True)
     document_number = serializers.CharField(required=False, allow_blank=True)
     phone_number = serializers.CharField(required=False, allow_blank=True)
 
@@ -16,7 +17,7 @@ class RechargeRequestSerializer(serializers.Serializer):
         if not Wallet.objects.filter(pk=value).exists():
             raise serializers.ValidationError('Wallet not found.')
         return value
-
+    
 class TransactionSerializer(serializers.ModelSerializer):
     class Meta:
         model = Transaction

@@ -1,18 +1,16 @@
-from django.http import HttpResponse
 from django.conf import settings
+from django.http import HttpResponse
 from rest_framework import status
 from rest_framework.generics import get_object_or_404
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import Wallet
+from .models import Transaction, Wallet
 from .permissions import IsWalletOwnerParent
 from .serializers import RechargeRequestSerializer, TransactionSerializer
-from .services import PayphonePreparer
-from .tasks import process_recharge_task
-from .models import Transaction
-from .tasks import send_recharge_confirmation_email
+from .services import GatewayError, PayphonePreparer
+from .tasks import process_recharge_task, send_recharge_confirmation_email
 
 
 class PayphoneRedirectView(APIView):
@@ -62,17 +60,18 @@ class WalletRechargeView(APIView):
 
         amount = serializer.validated_data['amount']
         kushki_token = serializer.validated_data.get('kushki_token')
+        document_type = serializer.validated_data.get('document_type') or 'CC'
         document_number = serializer.validated_data.get('document_number')
         phone_number = serializer.validated_data.get('phone_number')
 
         is_payphone_range = amount < settings.WALLET_RECHARGE_GATEWAY_THRESHOLD
         if is_payphone_range:
-            result = PayphonePreparer().prepare(wallet, amount)
+            try:
+                result = PayphonePreparer().prepare(wallet, amount)
+            except GatewayError as exc:
+                return Response({'detail': str(exc)}, status=400)
             return Response(
-                {
-                    'transaction_id': result['transaction_id'],
-                    'payment_url': result['payment_url'],
-                },
+                {'transaction_id': result['transaction_id'], 'payment_url': result['payment_url']},
                 status=status.HTTP_200_OK,
             )
 
@@ -80,7 +79,7 @@ class WalletRechargeView(APIView):
             return Response({'detail': 'Falta el token de Kushki.'}, status=400)
 
         process_recharge_task.delay(
-            wallet.id, str(amount), kushki_token, document_number, phone_number,
+            wallet.id, str(amount), kushki_token, document_type, document_number, phone_number,
         )
         return Response(
             {'detail': 'Recharge request received, processing.'},
@@ -116,7 +115,8 @@ class WalletTransactionListView(APIView):
         transactions = wallet.transactions.all()[:10]
         serializer = TransactionSerializer(transactions, many=True)
         return Response(serializer.data)
-    
+
+
 class KushkiWebhookView(APIView):
     """POST /api/wallet/kushki/webhook/
     Kushki notifies transaction events here."""

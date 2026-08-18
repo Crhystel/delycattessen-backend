@@ -21,14 +21,16 @@ class PaymentGateway(ABC):
 
     def process_recharge(
         self, wallet: Wallet, amount: Decimal, token: str = None,
-        document_number: str = None, phone_number: str = None,
+        document_type: str = None, document_number: str = None,
+        phone_number: str = None,
     ) -> Transaction:
         self._validate_amount(amount)
         transaction = self._create_pending_transaction(wallet, amount)
         try:
             external_id = self._send_charge_request(
                 wallet, amount, token=token,
-                document_number=document_number, phone_number=phone_number,
+                document_type=document_type, document_number=document_number,
+                phone_number=phone_number,
             )
         except GatewayError:
             transaction.status = Transaction.Status.FAILED
@@ -64,7 +66,8 @@ class PaymentGateway(ABC):
     @abstractmethod
     def _send_charge_request(
         self, wallet: Wallet, amount: Decimal, token: str = None,
-        document_number: str = None, phone_number: str = None,
+        document_type: str = None, document_number: str = None,
+        phone_number: str = None,
     ) -> str:
         """Send the charge to the external gateway and return its external
         transaction id. Must raise GatewayError on failure."""
@@ -76,7 +79,8 @@ class KushkiGateway(PaymentGateway):
 
     def _send_charge_request(
         self, wallet: Wallet, amount: Decimal, token: str = None,
-        document_number: str = None, phone_number: str = None,
+        document_type: str = None, document_number: str = None,
+        phone_number: str = None,
     ) -> str:
         if not token:
             raise GatewayError('Falta el token de Kushki generado en el frontend.')
@@ -95,7 +99,7 @@ class KushkiGateway(PaymentGateway):
                     'currency': 'USD',
                 },
                 'contactDetails': {
-                    'documentType': 'CC',
+                    'documentType': document_type or 'CC',
                     'documentNumber': document_number or '',
                     'email': parent_user.email or '',
                     'firstName': parent_user.first_name,
@@ -125,14 +129,14 @@ class PayphoneGateway(PaymentGateway):
 
     def _send_charge_request(
         self, wallet: Wallet, amount: Decimal, token: str = None,
-        document_number: str = None, phone_number: str = None,
+        document_type: str = None, document_number: str = None,
+        phone_number: str = None,
     ) -> str:
         raise NotImplementedError('Payphone real usa PayphonePreparer, no este flujo síncrono.')
 
 
 class GatewayRouter:
-    """Decide qué pasarela usar según el umbral de $5.00 (RF-01). El viewset
-    solo conoce este router, nunca las clases concretas (Dependency Inversion)."""
+    """Decide which gateway to use with a thershold of $5"""
 
     def get_gateway(self, amount: Decimal) -> PaymentGateway:
         threshold = settings.WALLET_RECHARGE_GATEWAY_THRESHOLD
@@ -142,9 +146,6 @@ class GatewayRouter:
 
 
 class PayphonePreparer:
-    """El Botón de Pago de Payphone es un flujo de dos pasos (Prepare -> el
-    usuario paga en un formulario web -> Confirm), no una llamada síncrona
-    como Kushki. Por eso vive aparte del Template Method de PaymentGateway."""
 
     def prepare(self, wallet: Wallet, amount: Decimal) -> dict:
         transaction = Transaction.objects.create(
@@ -171,9 +172,14 @@ class PayphonePreparer:
             },
             timeout=10,
         )
-        response.raise_for_status()
-        data = response.json()
 
+        if response.status_code != 200:
+            error_data = response.json() if response.content else {}
+            transaction.status = Transaction.Status.FAILED
+            transaction.save(update_fields=['status'])
+            raise GatewayError(error_data.get('message', 'Payphone rechazó la recarga.'))
+
+        data = response.json()
         payment_url = data['payWithCard']
         redirect_url = (
             f"{settings.PAYPHONE_REDIRECT_BASE_URL}?target={urllib.parse.quote(payment_url, safe='')}"
