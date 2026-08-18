@@ -38,6 +38,10 @@ class PaymentGateway(ABC):
         transaction.status = Transaction.Status.SUCCESS
         transaction.save(update_fields=['external_transaction_id', 'status'])
         self._credit_balance(wallet, amount)
+
+        from .tasks import send_recharge_confirmation_email
+        send_recharge_confirmation_email.delay(transaction.id)
+
         return transaction
 
     def _validate_amount(self, amount: Decimal) -> None:
@@ -109,7 +113,8 @@ class KushkiGateway(PaymentGateway):
         if response.status_code not in (200, 201) or 'ticketNumber' not in data:
             raise GatewayError(data.get('message', 'Kushki rechazó el cobro.'))
         return data['ticketNumber']
-    
+
+
 class PayphoneGateway(PaymentGateway):
     """Not used directly in Payphone's real flow — that goes through
     PayphonePreparer (two-step Prepare/Confirm). This class only exists so
@@ -201,6 +206,9 @@ class PayphonePreparer:
             transaction.status = Transaction.Status.SUCCESS
             transaction.wallet.balance += transaction.amount
             transaction.wallet.save(update_fields=['balance'])
+
+            from .tasks import send_recharge_confirmation_email
+            send_recharge_confirmation_email.delay(transaction.id)
         else:
             transaction.status = Transaction.Status.FAILED
         transaction.save(update_fields=['status'])

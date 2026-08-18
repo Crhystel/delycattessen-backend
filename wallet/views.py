@@ -11,6 +11,8 @@ from .permissions import IsWalletOwnerParent
 from .serializers import RechargeRequestSerializer, TransactionSerializer
 from .services import PayphonePreparer
 from .tasks import process_recharge_task
+from .models import Transaction
+from .tasks import send_recharge_confirmation_email
 
 
 class PayphoneRedirectView(APIView):
@@ -114,3 +116,24 @@ class WalletTransactionListView(APIView):
         transactions = wallet.transactions.all()[:10]
         serializer = TransactionSerializer(transactions, many=True)
         return Response(serializer.data)
+    
+class KushkiWebhookView(APIView):
+    """POST /api/wallet/kushki/webhook/
+    Kushki notifies transaction events here."""
+
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        ticket_number = request.data.get('ticketNumber')
+        transaction_status = request.data.get('transactionStatus')
+
+        if not ticket_number:
+            return Response({'detail': 'Missing ticketNumber.'}, status=400)
+
+        transaction = Transaction.objects.filter(external_transaction_id=ticket_number).first()
+        if transaction and transaction_status == 'APPROVED' and transaction.status != Transaction.Status.SUCCESS:
+            transaction.status = Transaction.Status.SUCCESS
+            transaction.save(update_fields=['status'])
+            send_recharge_confirmation_email.delay(transaction.id)
+
+        return Response({'received': True}, status=200)
