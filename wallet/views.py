@@ -3,6 +3,8 @@ from rest_framework.generics import get_object_or_404
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from django.conf import settings
+from django.http import HttpResponse
 
 from wallet.services import PayphonePreparer
 
@@ -72,3 +74,30 @@ class WalletTransactionListView(APIView):
         transactions = wallet.transactions.all()[:10]
         serializer = TransactionSerializer(transactions, many=True)
         return Response(serializer.data)
+
+class PayphoneRedirectView(APIView):
+    """Intermediate page served from our domain to redirect to Payphone's payment page, 
+    with a strict referrer policy."""
+
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        target_url = request.query_params.get('target')
+        if not target_url:
+            return HttpResponse('Falta el parámetro target.', status=400)
+
+        html = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <meta name="referrer" content="strict-origin-when-cross-origin">
+        </head>
+        <body>
+          <script>window.location.replace({target_url!r});</script>
+        </body>
+        </html>
+        """
+        response = HttpResponse(html)
+        response['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+        return response

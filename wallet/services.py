@@ -2,8 +2,10 @@ import uuid
 from abc import ABC, abstractmethod
 from decimal import Decimal
 
+from django.db import transaction
 import requests
 from django.conf import settings
+import urllib
 
 from .models import Transaction, Wallet
 
@@ -128,13 +130,20 @@ class PayphonePreparer:
         )
         response.raise_for_status()
         data = response.json()
+        print('PAYPHONE PREPARE STATUS:', response.status_code)
+        print('PAYPHONE PREPARE RESPONSE:', data)
+
+        payment_url = data['payWithCard']
+        redirect_url = (
+            f"{settings.PAYPHONE_REDIRECT_BASE_URL}?target={urllib.parse.quote(payment_url, safe='')}"
+        )
 
         transaction.external_transaction_id = str(data['paymentId'])
         transaction.save(update_fields=['external_transaction_id'])
 
         return {
             'transaction_id': transaction.id,
-            'payment_url': data['payWithCard'],
+            'payment_url': redirect_url,
         }
 
     def confirm(self, payphone_id: int, client_transaction_id: str) -> Transaction:

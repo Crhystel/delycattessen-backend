@@ -206,13 +206,19 @@ class StudentRegistrationSerializer(serializers.Serializer):
         student_user.set_password(validated_data['password'])
         student_user.save()
 
-        return StudentProfile.objects.create(
+        student_profile = StudentProfile.objects.create(
             user=student_user,
             institution=institution,
             profile_picture=validated_data['profile_picture'],
             parent=parent_profile,
         )
-        
+
+        from wallet.models import Wallet
+        Wallet.objects.create(student=student_profile, low_balance_threshold=5.00)
+
+        return student_profile
+
+
 class ChildSerializer(serializers.ModelSerializer):
     first_name = serializers.CharField(source='user.first_name')
     last_name = serializers.CharField(source='user.last_name')
@@ -228,8 +234,7 @@ class ChildSerializer(serializers.ModelSerializer):
     def get_balance(self, obj):
         wallet = getattr(obj, 'wallet', None)
         return str(wallet.balance) if wallet else None
-    
+
     def get_wallet_id(self, obj):
-        wallet= getattr(obj, 'wallet', None)
+        wallet = getattr(obj, 'wallet', None)
         return wallet.id if wallet else None
-        
