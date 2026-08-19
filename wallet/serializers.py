@@ -19,7 +19,22 @@ class RechargeRequestSerializer(serializers.Serializer):
         return value
     
 class TransactionSerializer(serializers.ModelSerializer):
+    display_name = serializers.SerializerMethodField()
+    time = serializers.SerializerMethodField()
+
     class Meta:
         model = Transaction
-        fields = ['id', 'amount', 'gateway', 'status', 'type', 'created_at']
+        fields = ['id', 'display_name', 'amount', 'gateway', 'status', 'type', 'time', 'created_at']
         read_only_fields = fields
+
+    def get_display_name(self, obj):
+        if obj.type == Transaction.Type.RECHARGE:
+            return 'Recarga de saldo'
+        # TODO: once wallet is connected to the catalog app, replace this
+        # with the actual product name from the consumption record.
+        return 'Consumo'
+
+    def get_time(self, obj):
+        import zoneinfo
+        local_time = obj.created_at.astimezone(zoneinfo.ZoneInfo('America/Guayaquil'))
+        return local_time.strftime('%I:%M %p').lstrip('0').lower()
