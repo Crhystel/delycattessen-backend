@@ -1,14 +1,18 @@
 from rest_framework import serializers
-from .models import MenuItem, Allergen
+from .models import MenuItem, Allergen, Ingredient
+from .mixins import IngredientValidationMixin
 
 class AllergenSerializer(serializers.ModelSerializer):
     class Meta:
         model = Allergen
         fields = ['id', 'name', 'description']
 
-class MenuItemSerializer(serializers.ModelSerializer):
-    allergens = AllergenSerializer(many=True, read_only=True)
+class IngredientSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Ingredient
+        fields = ['id', 'name', 'description']
 
+class MenuItemSerializer(IngredientValidationMixin, serializers.ModelSerializer):
     class Meta:
         model = MenuItem
-        fields = ['id', 'name', 'description', 'price', 'is_active', 'allergens']
+        fields = ['id', 'name', 'description', 'price', 'is_active', 'is_visible', 'stock', 'ingredients', 'allergens']

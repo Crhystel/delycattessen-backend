@@ -1,9 +1,20 @@
 from rest_framework import generics
-from rest_framework.permissions import IsAuthenticated
-from .models import MenuItem
-from .serializers import MenuItemSerializer
+from rest_framework.permissions import IsAuthenticated, IsAdminUser
+from .models import MenuItem, Ingredient
+from .serializers import MenuItemSerializer, IngredientSerializer
 
 class MenuListView(generics.ListAPIView):
-    queryset = MenuItem.objects.filter(is_active=True)
+    # Se filtran los ocultos por stock == 0
+    queryset = MenuItem.objects.filter(is_active=True, is_visible=True)
     serializer_class = MenuItemSerializer
     permission_classes = [IsAuthenticated]
+
+class MenuItemCreateView(generics.CreateAPIView):
+    queryset = MenuItem.objects.all()
+    serializer_class = MenuItemSerializer
+    permission_classes = [IsAdminUser]
+
+class IngredientListView(generics.ListAPIView):
+    queryset = Ingredient.objects.all()
+    serializer_class = IngredientSerializer
+    permission_classes = [IsAdminUser]
