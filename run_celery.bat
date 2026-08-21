@@ -1,0 +1,3 @@
+@echo off
+echo Iniciando Celery con las correcciones para RabbitMQ...
+celery -A delycattessen_backend worker -l info --pool=solo --without-mingle --without-gossip --without-heartbeat
