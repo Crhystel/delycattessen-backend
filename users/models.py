@@ -75,6 +75,9 @@ class StudentProfile(models.Model):
     parent = models.ForeignKey(
         ParentProfile, verbose_name=_('parent'), on_delete=models.CASCADE, related_name='children'
     )
+    allergies = models.ManyToManyField(
+        'catalog.Allergen', verbose_name=_('allergies'), blank=True, related_name='students'
+    )
 
     def __str__(self) -> str:
         return str(_('Perfil de Estudiante: %(username)s')) % {'username': self.user.username}

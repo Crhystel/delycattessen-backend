@@ -11,6 +11,8 @@ urlpatterns = [
     path('api/token/', EmailTokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('api/wallet/', include('wallet.urls')),
+    path('api/catalog/', include('catalog.urls')),
+    path('api/pos/', include('pos.urls')),
 ]
 
 if settings.DEBUG:
