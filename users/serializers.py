@@ -7,7 +7,7 @@ from django.contrib.auth.tokens import default_token_generator
 from django.db import transaction
 from django.core.cache import cache
 from django.utils.translation import gettext_lazy as _
-from .models import Institution, ParentProfile, StudentProfile, CustomUser
+from .models import Institution, ParentProfile, StudentProfile, CustomUser, Allergen, UserAllergy
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 User = get_user_model()
@@ -238,3 +238,14 @@ class ChildSerializer(serializers.ModelSerializer):
     def get_wallet_id(self, obj):
         wallet = getattr(obj, 'wallet', None)
         return wallet.id if wallet else None
+    
+class AllergenSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Allergen
+        fields = ('id','name')
+        
+class UserAllergySerializer(serializers.ModelSerializer):
+    allergen_name = serializers.CharField(source='allergen.name', read_only=True)
+    class Meta:
+        model = UserAllergy
+        fields = ('id', 'allergen', 'allergen_name')

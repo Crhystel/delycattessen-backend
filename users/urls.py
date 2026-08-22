@@ -10,6 +10,8 @@ from .views import (
     InstitutionListView,
     MeView,
     EmailTokenObtainPairView,
+    UserAllergyListView,
+    AllergenListView
 )
 from rest_framework_simplejwt.views import TokenRefreshView
 
@@ -26,4 +28,6 @@ urlpatterns = [
     path('login/', EmailTokenObtainPairView.as_view(), name='login'),
     path('login/refresh/', TokenRefreshView.as_view(), name='login-refresh'),
     path('children/', ChildrenListView.as_view(), name='children_list'),
+    path('allergens/', AllergenListView.as_view(), name='allergen_list'),
+    path('allergies/',UserAllergyListView.as_view(), name='user_allergies')
 ] + router.urls

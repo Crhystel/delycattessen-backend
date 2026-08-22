@@ -15,10 +15,12 @@ from .serializers import (
     PasswordResetConfirmSerializer,
     InstitutionSerializer,
     MeSerializer,
+    AllergenSerializer,
+    UserAllergySerializer
 )
-from .permissions import IsAdministrator, IsParentUser, SameInstitutionPermission, CanRequestPasswordReset
+from .permissions import IsAdministrator, IsParentUser, SameInstitutionPermission, CanRequestPasswordReset, CanManageAllergies
 from .mixins import InstitutionScopeMixin, TokenGeneratorMixin
-from .models import CustomUser, Institution
+from .models import CustomUser, Institution, Allergen, UserAllergy
 from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.tokens import RefreshToken
 from .serializers import EmailTokenObtainSerializer
@@ -135,3 +137,28 @@ class ChildrenListView(generics.ListAPIView):
 
     def get_queryset(self):
         return self.request.user.parent_profile.children.all()
+    
+class AllergenListView(generics.ListAPIView):
+    """GET /api/users/allergens/ - allergen catalog"""
+    queryset = Allergen.objects.all().order_by('name')
+    serializer_class = AllergenSerializer
+    permission_classes = [IsAuthenticated]
+    
+class UserAllergyListView(APIView):
+    """GET/PUT /api/users/allergies/?target_user_id=<id>
+    PUT replaces complete list of alergies from user"""
+    permission_classes = [IsAuthenticated, CanManageAllergies]
+    def get(self, request):
+        target_user_id = request.query_params.get('target_user_id')
+        allergies = UserAllergy.objects.filter(use_id=target_user_id).select_related('allergen')
+        return Response(UserAllergySerializer(allergies, many=True).data)
+    def put(self, request):
+        target_user_id = request.dat.get('target_user_id')
+        allergen_ids = request.dat.get('allergen_ids', [])
+        UserAllergy.objects.filter(user_id=target_user_id).delete()
+        UserAllergy.objects.bulk_create([
+            UserAllergy(user_id=target_user_id, allergen_id=aid) for aid in allergen_ids
+        ])
+        allergies = UserAllergy.objects.filter(user_id=target_user_id).select_related('allergen')
+        return Response(UserAllergySerializer(allergies, many=True).data)
+        

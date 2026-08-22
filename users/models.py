@@ -82,3 +82,36 @@ class StudentProfile(models.Model):
     class Meta:
         verbose_name = _('student profile')
         verbose_name_plural = _('student profiles')
+        
+class Allergen(models.Model):
+    """Catalog of common allergens — seeded via data migration."""
+
+    name = models.CharField(_('name'), max_length=100, unique=True)
+
+    def __str__(self) -> str:
+        return self.name
+
+    class Meta:
+        verbose_name = _('allergen')
+        verbose_name_plural = _('allergens')
+
+
+class UserAllergy(models.Model):
+    """Links a CustomUser (student or teacher) to an allergen they have.
+    Registered by a parent (for their child) or by the teacher themself."""
+
+    user = models.ForeignKey(
+        CustomUser, verbose_name=_('user'), on_delete=models.CASCADE, related_name='allergies'
+    )
+    allergen = models.ForeignKey(
+        Allergen, verbose_name=_('allergen'), on_delete=models.CASCADE, related_name='affected_users'
+    )
+    created_at = models.DateTimeField(_('created at'), auto_now_add=True)
+
+    class Meta:
+        unique_together = ('user', 'allergen')
+        verbose_name = _('user allergy')
+        verbose_name_plural = _('user allergies')
+
+    def __str__(self) -> str:
+        return f'{self.user.username} - {self.allergen.name}'
