@@ -1,6 +1,7 @@
 from django.db import models
 from django.contrib.auth.models import AbstractUser
 from django.utils.translation import gettext_lazy as _
+from django.contrib.auth.hashers import check_password, make_password
 
 
 class Institution(models.Model):
@@ -51,6 +52,16 @@ class ParentProfile(models.Model):
     user = models.OneToOneField(
         CustomUser, verbose_name=_('user'), on_delete=models.CASCADE, related_name='parent_profile'
     )
+    payment_pin_hash = models.CharField(_('payment PIN hash'), max_length=128, blank=True)
+
+    def set_payment_pin(self, raw_pin: str) -> None:
+        self.payment_pin_hash = make_password(raw_pin)
+        self.save(update_fields=['payment_pin_hash'])
+
+    def check_payment_pin(self, raw_pin: str) -> bool:
+        if not self.payment_pin_hash:
+            return False
+        return check_password(raw_pin, self.payment_pin_hash)
 
     def __str__(self) -> str:
         return str(_('Perfil de Padre: %(name)s')) % {
@@ -60,7 +71,6 @@ class ParentProfile(models.Model):
     class Meta:
         verbose_name = _('parent profile')
         verbose_name_plural = _('parent profiles')
-
 
 class StudentProfile(models.Model):
     user = models.OneToOneField(

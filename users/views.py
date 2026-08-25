@@ -1,4 +1,5 @@
 from rest_framework import generics, status
+from rest_framework.generics import get_object_or_404
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.parsers import MultiPartParser, FormParser
@@ -16,14 +17,16 @@ from .serializers import (
     InstitutionSerializer,
     MeSerializer,
     AllergenSerializer,
-    UserAllergySerializer
+    UserAllergySerializer,
+    EmailTokenObtainSerializer,
+    SetPaymentPinSerializer,
+    VerifyPaymentPinSerializer,
 )
-from .permissions import IsAdministrator, IsParentUser, SameInstitutionPermission, CanRequestPasswordReset, CanManageAllergies
+from .permissions import IsAdministrator, IsParentUser, SameInstitutionPermission, CanRequestPasswordReset, CanManageAllergies, IsParentOfStudent
 from .mixins import InstitutionScopeMixin, TokenGeneratorMixin
-from .models import CustomUser, Institution, Allergen, UserAllergy
+from .models import CustomUser, Institution, Allergen, UserAllergy, StudentProfile
 from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.tokens import RefreshToken
-from .serializers import EmailTokenObtainSerializer
 
 
 class StaffViewSet(InstitutionScopeMixin, ModelViewSet):
@@ -148,17 +151,57 @@ class UserAllergyListView(APIView):
     """GET/PUT /api/users/allergies/?target_user_id=<id>
     PUT replaces complete list of alergies from user"""
     permission_classes = [IsAuthenticated, CanManageAllergies]
+
     def get(self, request):
         target_user_id = request.query_params.get('target_user_id')
-        allergies = UserAllergy.objects.filter(use_id=target_user_id).select_related('allergen')
+        allergies = UserAllergy.objects.filter(user_id=target_user_id).select_related('allergen')
         return Response(UserAllergySerializer(allergies, many=True).data)
+
     def put(self, request):
-        target_user_id = request.dat.get('target_user_id')
-        allergen_ids = request.dat.get('allergen_ids', [])
+        target_user_id = request.data.get('target_user_id')
+        allergen_ids = request.data.get('allergen_ids', [])
         UserAllergy.objects.filter(user_id=target_user_id).delete()
         UserAllergy.objects.bulk_create([
             UserAllergy(user_id=target_user_id, allergen_id=aid) for aid in allergen_ids
         ])
         allergies = UserAllergy.objects.filter(user_id=target_user_id).select_related('allergen')
         return Response(UserAllergySerializer(allergies, many=True).data)
-        
+    
+class StudentAllergyView(APIView):
+    """GET/PUT /api/users/students/<student_id>/allergies/"""
+
+    permission_classes = [IsAuthenticated, IsParentOfStudent]
+
+    def get(self, request, student_id):
+        student = get_object_or_404(StudentProfile, pk=student_id)
+        return Response(AllergenSerializer(student.allergies.all(), many=True).data)
+
+    def put(self, request, student_id):
+        student = get_object_or_404(StudentProfile, pk=student_id)
+        allergen_ids = request.data.get('allergen_ids', [])
+        student.allergies.set(allergen_ids)
+        return Response(AllergenSerializer(student.allergies.all(), many=True).data)
+
+class SetPaymentPinView(APIView):
+    """POST /api/users/set-payment-pin/ — the dad creates or changes his PIN"""
+
+    permission_classes = [IsAuthenticated, IsParentUser]
+
+    def post(self, request):
+        serializer = SetPaymentPinSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        request.user.parent_profile.set_payment_pin(serializer.validated_data['pin'])
+        return Response({'detail': 'PIN actualizado correctamente.'})
+
+
+class VerifyPaymentPinView(APIView):
+    """POST /api/users/verify-payment-pin/ — It runs before confirming a 
+    top-up (Kushki or Payphone), even if the JWT session is still active."""
+
+    permission_classes = [IsAuthenticated, IsParentUser]
+
+    def post(self, request):
+        serializer = VerifyPaymentPinSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        is_valid = request.user.parent_profile.check_payment_pin(serializer.validated_data['pin'])
+        return Response({'valid': is_valid})

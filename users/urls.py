@@ -11,7 +11,10 @@ from .views import (
     MeView,
     EmailTokenObtainPairView,
     UserAllergyListView,
-    AllergenListView
+    AllergenListView,
+    StudentAllergyView,
+    SetPaymentPinView,
+    VerifyPaymentPinView,
 )
 from rest_framework_simplejwt.views import TokenRefreshView
 
@@ -29,5 +32,8 @@ urlpatterns = [
     path('login/refresh/', TokenRefreshView.as_view(), name='login-refresh'),
     path('children/', ChildrenListView.as_view(), name='children_list'),
     path('allergens/', AllergenListView.as_view(), name='allergen_list'),
-    path('allergies/',UserAllergyListView.as_view(), name='user_allergies')
+    path('allergies/',UserAllergyListView.as_view(), name='user_allergies'),
+    path('students/<int:student_id>/allergies/', StudentAllergyView.as_view(), name='student-allergies'),
+    path('set-payment-pin/', SetPaymentPinView.as_view(), name='set-payment-pin'),
+    path('verify-payment-pin/', VerifyPaymentPinView.as_view(), name='verify-payment-pin'),
 ] + router.urls

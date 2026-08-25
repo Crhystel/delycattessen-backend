@@ -9,6 +9,7 @@ from django.core.cache import cache
 from django.utils.translation import gettext_lazy as _
 from .models import Institution, ParentProfile, StudentProfile, CustomUser, Allergen, UserAllergy
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+from .mixins import UppercaseNamesMixin
 
 User = get_user_model()
 
@@ -18,7 +19,8 @@ def generate_temporary_password(length=12):
     return ''.join(secrets.choice(characters) for _ in range(length))
 
 
-class CreateStaffSerializer(serializers.ModelSerializer):
+class CreateStaffSerializer(UppercaseNamesMixin, serializers.ModelSerializer):
+    uppercase_fields = ('first_name', 'second_name', 'last_name', 'second_last_name')
     role = serializers.ChoiceField(
         choices=[(User.Role.TEACHER, _('Docente')), (User.Role.OPERATIONS_STAFF, _('Personal Operativo'))]
     )
@@ -42,6 +44,8 @@ class CreateStaffSerializer(serializers.ModelSerializer):
             'is_active': {'required': False},
         }
 
+    def validate_email(self, value):
+        return value.lower()
     @transaction.atomic
     def create(self, validated_data: dict) -> User:
         request = self.context.get('request')
@@ -121,14 +125,17 @@ class InstitutionSerializer(serializers.ModelSerializer):
 class MeSerializer(serializers.ModelSerializer):
     institution_name = serializers.CharField(source='institution.name', read_only=True)
     has_children = serializers.SerializerMethodField()
+    has_payment_pin = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ('id', 'email', 'first_name', 'last_name', 'role', 'institution', 'institution_name', 'has_children')
+        fields = ('id', 'email', 'first_name', 'last_name', 'role', 'institution', 'institution_name', 'has_children', 'has_payment_pin')
 
     def get_has_children(self, obj):
         return hasattr(obj, 'parent_profile') and obj.parent_profile.children.exists()
 
+    def get_has_payment_pin(self, obj):
+        return hasattr(obj, 'parent_profile') and bool(obj.parent_profile.payment_pin_hash)
 
 class EmailTokenObtainSerializer(TokenObtainPairSerializer):
     default_error_messages = {
@@ -142,6 +149,7 @@ class ParentRegistrationSerializer(serializers.Serializer):
     password_confirm = serializers.CharField(write_only=True)
 
     def validate_email(self, value):
+        value = value.lower()
         if CustomUser.objects.filter(email__iexact=value).exists():
             raise serializers.ValidationError('Ya existe una cuenta con este correo.')
         return value
@@ -173,7 +181,8 @@ class ParentRegistrationSerializer(serializers.Serializer):
             suffix += 1
         return username
     
-class StudentRegistrationSerializer(serializers.Serializer):
+class StudentRegistrationSerializer(UppercaseNamesMixin,serializers.Serializer):
+    uppercase_fields = ('first_name', 'second_name', 'first_last_name', 'second_last_name')
     first_name = serializers.CharField(max_length=150)
     second_name = serializers.CharField(max_length=150, required=False, allow_blank=True)
     first_last_name = serializers.CharField(max_length=150)
@@ -249,3 +258,10 @@ class UserAllergySerializer(serializers.ModelSerializer):
     class Meta:
         model = UserAllergy
         fields = ('id', 'allergen', 'allergen_name')
+
+class SetPaymentPinSerializer(serializers.Serializer):
+    pin = serializers.RegexField(regex=r'^\d{4}$', error_messages={'invalid': 'El PIN debe tener exactamente 4 dígitos.'})
+
+
+class VerifyPaymentPinSerializer(serializers.Serializer):
+    pin = serializers.CharField(max_length=4)

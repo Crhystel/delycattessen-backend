@@ -45,4 +45,19 @@ class TokenGeneratorMixin:
         cache.set(f"password_reset_code:{email}", code, timeout=CODE_TTL_SECONDS)
         from .tasks import send_password_reset_email
         send_password_reset_email.delay(email, code)
+
+class UppercaseNamesMixin:
+    """Uppercases the given name fields in validated_data before
+    create/update, so all registered names (students, staff, or any
+    future user type) are stored consistently regardless of how the
+    user typed them. Subclasses set `uppercase_fields`."""
+
+    uppercase_fields = ()
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        for field in self.uppercase_fields:
+            if field in attrs and attrs[field]:
+                attrs[field] = attrs[field].upper()
+        return attrs
         

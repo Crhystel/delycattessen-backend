@@ -1,6 +1,6 @@
 from rest_framework.permissions import BasePermission
 from django.utils.translation import gettext_lazy as _
-from .models import CustomUser
+from .models import CustomUser, StudentProfile
 
 
 class SameInstitutionPermission(BasePermission):
@@ -67,3 +67,11 @@ class CanManageAllergies(BasePermission):
             return target_user.student_profile.parent_id == request.user.parent_profile.id
 
         return False
+    
+class IsParentOfStudent(BasePermission):
+    message = 'No tienes permiso sobre este estudiante'
+    def has_permission(self, request, view):
+        student_id = view.kwargs.get('student_id')
+        if not student_id or request.user.role != CustomUser.Role.PARENT:
+            return False
+        return StudentProfile.objects.filter(pk=student_id, parent__user=request.user).exists()
