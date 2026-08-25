@@ -33,3 +33,9 @@ class MenuItemSerializer(IngredientValidationMixin, serializers.ModelSerializer)
             'id', 'name', 'description', 'category', 'image', 'price',
             'is_active', 'is_visible', 'stock', 'ingredients', 'allergens',
         ]
+
+    def to_representation(self, instance):
+        representation = super().to_representation(instance)
+        representation['ingredients'] = IngredientSerializer(instance.ingredients.all(), many=True).data
+        representation['allergens'] = AllergenSerializer(instance.allergens.all(), many=True).data
+        return representation
