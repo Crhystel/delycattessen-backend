@@ -4,14 +4,14 @@ from django.db import transaction
 from django.utils.translation import gettext_lazy as _
 from .serializers import PreOrderCreateSerializer
 from .models import PreOrder, PreOrderItem
-from .mixins import AllergenValidatorMixin
+from .mixins import AllergenValidatorMixin, ParentalControlValidatorMixin
 from users.permissions import IsParentUser
 from users.models import StudentProfile
 from wallet.models import Wallet, Transaction
 from catalog.models import MenuItem
 from rest_framework.exceptions import ValidationError
 
-class PreOrderCreateView(AllergenValidatorMixin, generics.CreateAPIView):
+class PreOrderCreateView(AllergenValidatorMixin, ParentalControlValidatorMixin, generics.CreateAPIView):
     serializer_class = PreOrderCreateSerializer
     permission_classes = [IsParentUser]
 

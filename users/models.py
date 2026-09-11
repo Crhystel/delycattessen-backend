@@ -128,3 +128,18 @@ class UserAllergy(models.Model):
 
     def __str__(self) -> str:
         return f'{self.user.username} - {self.allergen.name}'
+class ParentalControl(models.Model):
+    student = models.OneToOneField(
+        StudentProfile, verbose_name=_('student'), on_delete=models.CASCADE, related_name='parental_control'
+    )
+    daily_limit_enabled = models.BooleanField(_('daily limit enabled'), default=False)
+    daily_limit_amount = models.DecimalField(_('daily limit amount'), max_digits=8, decimal_places=2, default=0.00)
+    allowed_days_enabled = models.BooleanField(_('allowed days enabled'), default=False)
+    allowed_days = models.JSONField(_('allowed days'), default=list, help_text=_('List of integers (0=Monday, 6=Sunday)'))
+
+    def __str__(self) -> str:
+        return f"Parental Control for {self.student.user.username}"
+
+    class Meta:
+        verbose_name = _('parental control')
+        verbose_name_plural = _('parental controls')

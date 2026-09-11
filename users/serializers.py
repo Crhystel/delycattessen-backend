@@ -265,3 +265,10 @@ class SetPaymentPinSerializer(serializers.Serializer):
 
 class VerifyPaymentPinSerializer(serializers.Serializer):
     pin = serializers.CharField(max_length=4)
+from .models import ParentalControl
+
+class ParentalControlSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ParentalControl
+        fields = ['daily_limit_enabled', 'daily_limit_amount', 'allowed_days_enabled', 'allowed_days']
+

@@ -15,6 +15,7 @@ from .views import (
     StudentAllergyView,
     SetPaymentPinView,
     VerifyPaymentPinView,
+    ParentalControlView,
 )
 from rest_framework_simplejwt.views import TokenRefreshView
 
@@ -34,6 +35,7 @@ urlpatterns = [
     path('allergens/', AllergenListView.as_view(), name='allergen_list'),
     path('allergies/',UserAllergyListView.as_view(), name='user_allergies'),
     path('students/<int:student_id>/allergies/', StudentAllergyView.as_view(), name='student-allergies'),
+    path('students/<int:student_id>/parental-control/', ParentalControlView.as_view(), name='student-parental-control'),
     path('set-payment-pin/', SetPaymentPinView.as_view(), name='set-payment-pin'),
     path('verify-payment-pin/', VerifyPaymentPinView.as_view(), name='verify-payment-pin'),
 ] + router.urls

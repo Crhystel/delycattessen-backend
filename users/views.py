@@ -205,3 +205,15 @@ class VerifyPaymentPinView(APIView):
         serializer.is_valid(raise_exception=True)
         is_valid = request.user.parent_profile.check_payment_pin(serializer.validated_data['pin'])
         return Response({'valid': is_valid})
+from .models import ParentalControl
+from .serializers import ParentalControlSerializer
+
+class ParentalControlView(generics.RetrieveUpdateAPIView):
+    serializer_class = ParentalControlSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_object(self):
+        student_id = self.kwargs.get('student_id')
+        student = generics.get_object_or_404(StudentProfile, id=student_id, parent=self.request.user.parent_profile)
+        obj, created = ParentalControl.objects.get_or_create(student=student)
+        return obj
