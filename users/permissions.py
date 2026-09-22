@@ -75,3 +75,27 @@ class IsParentOfStudent(BasePermission):
         if not student_id or request.user.role != CustomUser.Role.PARENT:
             return False
         return StudentProfile.objects.filter(pk=student_id, parent__user=request.user).exists()
+
+
+class IsOperativeUser(BasePermission):
+    """Permission class ensuring only OPERATIONS_STAFF or ADMIN can trigger POS identification."""
+    message = _('Solo el personal operativo puede realizar identificaciones en el POS.')
+
+    def has_permission(self, request, view):
+        return bool(
+            request.user
+            and request.user.is_authenticated
+            and request.user.role in [CustomUser.Role.OPERATIONS_STAFF, CustomUser.Role.ADMIN]
+        )
+
+
+class IsStudentOrTeacherUser(BasePermission):
+    """Permission class for student or teacher QR generation and contingency access."""
+    message = _('Acceso restringido a Estudiantes y Docentes.')
+
+    def has_permission(self, request, view):
+        return bool(
+            request.user
+            and request.user.is_authenticated
+            and request.user.role in [CustomUser.Role.STUDENT, CustomUser.Role.TEACHER]
+        )

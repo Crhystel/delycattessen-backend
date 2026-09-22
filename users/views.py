@@ -217,3 +217,114 @@ class ParentalControlView(generics.RetrieveUpdateAPIView):
         student = generics.get_object_or_404(StudentProfile, id=student_id, parent=self.request.user.parent_profile)
         obj, created = ParentalControl.objects.get_or_create(student=student)
         return obj
+
+
+import jwt
+import uuid
+from datetime import datetime, timezone, timedelta
+from django.conf import settings
+from rest_framework.parsers import MultiPartParser, FormParser
+from .models import UserBiometric
+from .permissions import IsStudentOrTeacherUser
+from pos.mixins import BiometricValidationMixin
+
+class DynamicQrTokenView(APIView):
+    """
+    GET /api/users/qr/token/
+    Generates a dynamic, time-sensitive QR token (valid for 60 seconds)
+    for the authenticated student or teacher, preventing spoofing with a single-use nonce.
+    Also returns the user's fresh wallet balance and profile summary for the contingency view.
+    """
+    permission_classes = [IsAuthenticated, IsStudentOrTeacherUser]
+
+    def get(self, request):
+        user = request.user
+        now = datetime.now(timezone.utc)
+        ttl_seconds = 60
+        nonce = uuid.uuid4().hex
+
+        payload = {
+            'sub': str(user.id),
+            'user_id': user.id,
+            'username': user.username,
+            'role': user.role,
+            'nonce': nonce,
+            'type': 'pos_dynamic_qr',
+            'iat': now,
+            'exp': now + timedelta(seconds=ttl_seconds),
+        }
+        token = jwt.encode(payload, settings.SECRET_KEY, algorithm='HS256')
+
+        # Balance resolution
+        balance = "0.00"
+        if hasattr(user, 'student_profile') and hasattr(user.student_profile, 'wallet'):
+            balance = str(user.student_profile.wallet.balance)
+        elif hasattr(user, 'wallet'):
+            balance = str(user.wallet.balance)
+
+        full_name = f"{user.first_name} {user.last_name}".strip() or user.username
+
+        return Response({
+            "token": token,
+            "expires_in": ttl_seconds,
+            "issued_at": now.isoformat(),
+            "user_id": user.id,
+            "full_name": full_name,
+            "balance": balance,
+            "role": user.role,
+        })
+
+
+class RegisterBiometricView(BiometricValidationMixin, APIView):
+    """
+    POST /api/users/biometrics/register/
+    Registers or updates the biometric facial vector of a student, teacher, or user.
+    Strictly complies with Data Protection Laws:
+    Extracts embedding vector, encrypts with AES-256-GCM, and destroys raw image in memory.
+    """
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        photo = request.FILES.get('photo')
+        if not photo:
+            return Response(
+                {"detail": _("Debe enviar una fotografía en el campo 'photo'.")},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        target_user_id = request.data.get('target_user_id')
+        if target_user_id:
+            try:
+                target_user = CustomUser.objects.get(pk=target_user_id)
+            except CustomUser.DoesNotExist:
+                return Response({"detail": _("Usuario objetivo no encontrado.")}, status=status.HTTP_404_NOT_FOUND)
+        else:
+            target_user = request.user
+
+        # 1. Extract embedding vector (wipes raw frame memory)
+        try:
+            vector = self.extract_face_embedding(photo)
+        except Exception as e:
+            return Response({"detail": f"Error al extraer rasgos biométricos: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 2. Encrypt vector with AES-256-GCM
+        ciphertext, nonce, tag = self.encrypt_embedding(vector)
+
+        # 3. Store only encrypted vector, nonce, tag
+        UserBiometric.objects.update_or_create(
+            user=target_user,
+            defaults={
+                'encrypted_embedding': ciphertext,
+                'nonce': nonce,
+                'tag': tag,
+                'is_active': True,
+            }
+        )
+
+        return Response({
+            "detail": _("Perfil biométrico facial registrado exitosamente con cifrado AES-256."),
+            "user_id": target_user.id,
+            "username": target_user.username,
+        }, status=status.HTTP_201_CREATED)
+

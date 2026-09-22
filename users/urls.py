@@ -16,6 +16,8 @@ from .views import (
     SetPaymentPinView,
     VerifyPaymentPinView,
     ParentalControlView,
+    DynamicQrTokenView,
+    RegisterBiometricView,
 )
 from rest_framework_simplejwt.views import TokenRefreshView
 
@@ -38,4 +40,6 @@ urlpatterns = [
     path('students/<int:student_id>/parental-control/', ParentalControlView.as_view(), name='student-parental-control'),
     path('set-payment-pin/', SetPaymentPinView.as_view(), name='set-payment-pin'),
     path('verify-payment-pin/', VerifyPaymentPinView.as_view(), name='verify-payment-pin'),
-] + router.urls
+    path('qr/token/', DynamicQrTokenView.as_view(), name='user-qr-token'),
+    path('biometrics/register/', RegisterBiometricView.as_view(), name='user-biometrics-register'),
+] + router.urls
