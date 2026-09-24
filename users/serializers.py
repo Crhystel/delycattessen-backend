@@ -2,7 +2,6 @@ import secrets
 import string
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
-from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth.tokens import default_token_generator
 from django.db import transaction
 from django.core.cache import cache
@@ -10,13 +9,18 @@ from django.utils.translation import gettext_lazy as _
 from .models import Institution, ParentProfile, StudentProfile, CustomUser, Allergen, UserAllergy
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from .mixins import UppercaseNamesMixin
+from .fields import PasswordField
 
 User = get_user_model()
 
 
 def generate_temporary_password(length=12):
-    characters = string.ascii_letters + string.digits
-    return ''.join(secrets.choice(characters) for _ in range(length))
+    pools = (string.ascii_uppercase, string.ascii_lowercase, string.digits, '!@#$%^&*')
+    chars = [secrets.choice(pool) for pool in pools]
+    alphabet = ''.join(pools)
+    chars += [secrets.choice(alphabet) for idx in range(length - len(chars))]
+    secrets.SystemRandom().shuffle(chars)
+    return ''.join(chars)
 
 
 class CreateStaffSerializer(UppercaseNamesMixin, serializers.ModelSerializer):
@@ -84,8 +88,10 @@ class PasswordResetRequestSerializer(serializers.Serializer):
 class PasswordResetConfirmSerializer(serializers.Serializer):
     email = serializers.EmailField()
     code = serializers.CharField(max_length=6, min_length=6)
-    new_password = serializers.CharField(write_only=True, required=True, style={'input_type': 'password'})
-    confirm_password = serializers.CharField(write_only=True, required=True, style={'input_type': 'password'})
+    new_password = PasswordField(required=True)
+    confirm_password = serializers.CharField(
+        write_only=True, required=True, trim_whitespace=False, style={'input_type': 'password'}
+    )
 
     def validate(self, attrs: dict) -> dict:
         email = attrs.get('email')
@@ -145,8 +151,8 @@ class EmailTokenObtainSerializer(TokenObtainPairSerializer):
 class ParentRegistrationSerializer(serializers.Serializer):
 
     email = serializers.EmailField()
-    password = serializers.CharField(write_only=True, validators=[validate_password])
-    password_confirm = serializers.CharField(write_only=True)
+    password = PasswordField()
+    password_confirm = serializers.CharField(write_only=True, trim_whitespace=False)
 
     def validate_email(self, value):
         value = value.lower()
@@ -191,7 +197,7 @@ class StudentRegistrationSerializer(UppercaseNamesMixin,serializers.Serializer):
         queryset=Institution.objects.all(), source='institution',
     )
     username = serializers.CharField(max_length=150)
-    password = serializers.CharField(write_only=True, validators=[validate_password])
+    password = PasswordField()
     profile_picture = serializers.ImageField()
 
     def validate_username(self, value):
@@ -200,8 +206,9 @@ class StudentRegistrationSerializer(UppercaseNamesMixin,serializers.Serializer):
         return value
     
     def validate(self, attrs):
-        parent_profile = self.context['paret_profile']
-        institution= attrs.get('institution')
+        attrs = super().validate(attrs)  # applies UppercaseNamesMixin
+        parent_profile = self.context['parent_profile']
+        institution = attrs.get('institution')
         existing_institution_id = (
             parent_profile.children.values_list('institution_id', flat=True).first()
         )
@@ -305,4 +312,3 @@ class ParentalControlSerializer(serializers.ModelSerializer):
     class Meta:
         model = ParentalControl
         fields = ['daily_limit_enabled', 'daily_limit_amount', 'allowed_days_enabled', 'allowed_days']
-
