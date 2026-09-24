@@ -6,6 +6,7 @@ from .serializers import (
     IngredientSerializer,
     IngredientCreateSerializer,
     AllergenSerializer,
+    AllergenCreateSerializer,
 )
 
 
@@ -15,6 +16,12 @@ class MenuListView(generics.ListAPIView):
     permission_classes = [IsAuthenticated]
 
 
+class AdminMenuListView(generics.ListAPIView):
+    queryset = MenuItem.objects.all().order_by('name')
+    serializer_class = MenuItemSerializer
+    permission_classes = [IsAdminUser]
+
+
 class MenuItemCreateView(generics.CreateAPIView):
     queryset = MenuItem.objects.all()
     serializer_class = MenuItemSerializer
@@ -22,9 +29,6 @@ class MenuItemCreateView(generics.CreateAPIView):
 
 
 class MenuItemDetailView(generics.RetrieveUpdateDestroyAPIView):
-    """GET/PATCH/DELETE /api/catalog/menu/<id>/ — used by the admin panel
-    to edit or remove a product from the catalog."""
-
     queryset = MenuItem.objects.all()
     serializer_class = MenuItemSerializer
     permission_classes = [IsAdminUser]
@@ -37,11 +41,17 @@ class IngredientListView(generics.ListAPIView):
 
 
 class IngredientCreateView(generics.CreateAPIView):
-    """POST /api/catalog/ingredients/create/ — lets an admin add a new
-    ingredient on the fly from the product form."""
-
     queryset = Ingredient.objects.all()
     serializer_class = IngredientCreateSerializer
+    permission_classes = [IsAdminUser]
+
+
+class IngredientDetailView(generics.RetrieveUpdateAPIView):
+    """GET/PATCH /api/catalog/ingredients/<id>/ — lets an admin view or
+    update which allergens a given ingredient contains."""
+
+    queryset = Ingredient.objects.all()
+    serializer_class = IngredientSerializer
     permission_classes = [IsAdminUser]
 
 
@@ -49,11 +59,12 @@ class AllergenListView(generics.ListAPIView):
     queryset = Allergen.objects.all().order_by('name')
     serializer_class = AllergenSerializer
     permission_classes = [IsAuthenticated]
-    
-class AdminMenuListView(generics.ListAPIView):
-    """GET /api/catalog/menu/admin/ — returns ALL products (including
-    hidden ones), used by the admin panel's product table so staff can
-    still see and edit out-of-stock items."""
-    queryset = MenuItem.objects.all().order_by('name')
-    serializer_class = MenuItemSerializer
-    permission_classes = [IsAdminUser]
+
+class AllergenCreateView(generics.CreateAPIView):
+    """POST /api/catalog/allergens/create/ — a parent can register a new
+    allergen if it's not in the catalog yet (e.g. an ingredient-specific
+    allergy like "Arroz" that isn't a standard medical category)."""
+
+    queryset = Allergen.objects.all()
+    serializer_class = AllergenCreateSerializer
+    permission_classes = [IsAuthenticated]

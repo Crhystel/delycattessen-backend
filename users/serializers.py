@@ -198,6 +198,18 @@ class StudentRegistrationSerializer(UppercaseNamesMixin,serializers.Serializer):
         if CustomUser.objects.filter(username=value).exists():
             raise serializers.ValidationError('Ese nombre de usuario ya está en uso.')
         return value
+    
+    def validate(self, attrs):
+        parent_profile = self.context['paret_profile']
+        institution= attrs.get('institution')
+        existing_institution_id = (
+            parent_profile.children.values_list('institution_id', flat=True).first()
+        )
+        if existing_institution_id and institution and existing_institution_id != institution.id:
+            raise serializers.ValidationError({
+                'institution_id': 'No puedes registrar hijos en instituciones diferentes'
+            })
+        return attrs
 
     def create(self, validated_data):
         parent_profile = self.context['parent_profile']

@@ -1,7 +1,6 @@
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 
-# Ctalog models (Products and allergens)
 
 class Allergen(models.Model):
     name = models.CharField(_('name'), max_length=100, unique=True)
@@ -17,6 +16,7 @@ class Allergen(models.Model):
 class Ingredient(models.Model):
     name = models.CharField(_('name'), max_length=100, unique=True)
     description = models.TextField(_('description'), blank=True)
+    allergens = models.ManyToManyField(Allergen, blank=True, related_name='ingredients')
 
     class Meta:
         verbose_name = _('ingredient')
