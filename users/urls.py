@@ -2,6 +2,7 @@ from django.urls import path
 from rest_framework.routers import DefaultRouter
 from .views import (
     ChildrenListView,
+    ChildPhotoUpdateView,
     ParentRegistrationView,
     StudentRegistrationView,
     StaffViewSet,
@@ -34,6 +35,7 @@ urlpatterns = [
     path('login/', EmailTokenObtainPairView.as_view(), name='login'),
     path('login/refresh/', TokenRefreshView.as_view(), name='login-refresh'),
     path('children/', ChildrenListView.as_view(), name='children_list'),
+    path('children/<int:student_id>/photo/', ChildPhotoUpdateView.as_view(), name='child_photo_update'),
     path('allergens/', AllergenListView.as_view(), name='allergen_list'),
     path('allergies/',UserAllergyListView.as_view(), name='user_allergies'),
     path('students/<int:student_id>/allergies/', StudentAllergyView.as_view(), name='student-allergies'),

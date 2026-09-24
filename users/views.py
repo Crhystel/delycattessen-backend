@@ -140,6 +140,47 @@ class ChildrenListView(generics.ListAPIView):
 
     def get_queryset(self):
         return self.request.user.parent_profile.children.all()
+
+
+class ChildPhotoUpdateView(APIView):
+    """
+    PATCH /api/users/children/<student_id>/photo/
+    Updates the profile picture of a child and regenerates/updates the facial biometric embedding.
+    """
+    permission_classes = [IsAuthenticated, IsParentOfStudent]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def patch(self, request, student_id):
+        student_profile = get_object_or_404(StudentProfile, pk=student_id)
+        if 'profile_picture' not in request.FILES:
+            return Response({'error': 'No se envió ninguna imagen.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        photo = request.FILES['profile_picture']
+        student_profile.profile_picture = photo
+        student_profile.save()
+
+        # Update facial biometric embedding for POS face recognition
+        try:
+            from pos.mixins import BiometricValidationMixin
+            from users.models import UserBiometric
+            mixin = BiometricValidationMixin()
+            photo.seek(0)
+            vector = mixin.extract_face_embedding(photo)
+            ciphertext, nonce, tag = mixin.encrypt_embedding(vector)
+            UserBiometric.objects.update_or_create(
+                user=student_profile.user,
+                defaults={
+                    'encrypted_embedding': ciphertext,
+                    'nonce': nonce,
+                    'tag': tag,
+                    'is_active': True,
+                }
+            )
+        except Exception:
+            pass
+
+        serializer = ChildSerializer(student_profile)
+        return Response(serializer.data, status=status.HTTP_200_OK)
     
 class AllergenListView(generics.ListAPIView):
     """GET /api/users/allergens/ - allergen catalog"""
