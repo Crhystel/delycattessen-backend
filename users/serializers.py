@@ -234,6 +234,28 @@ class StudentRegistrationSerializer(UppercaseNamesMixin,serializers.Serializer):
             parent=parent_profile,
         )
 
+        # Automatic biometric facial vector registration from profile picture
+        try:
+            from pos.mixins import BiometricValidationMixin
+            from users.models import UserBiometric
+            mixin = BiometricValidationMixin()
+            photo = validated_data['profile_picture']
+            photo.seek(0)
+            vector = mixin.extract_face_embedding(photo)
+            ciphertext, nonce, tag = mixin.encrypt_embedding(vector)
+            UserBiometric.objects.update_or_create(
+                user=student_user,
+                defaults={
+                    'encrypted_embedding': ciphertext,
+                    'nonce': nonce,
+                    'tag': tag,
+                    'is_active': True,
+                }
+            )
+        except Exception as e:
+            # Fallback gracefully if biometric extraction encounters non-standard format
+            pass
+
         from wallet.models import Wallet
         Wallet.objects.create(student=student_profile, low_balance_threshold=5.00)
 

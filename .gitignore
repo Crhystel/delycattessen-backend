@@ -26,6 +26,7 @@ dist/
 # Archivos estáticos generados
 staticfiles/
 media/
+models/
 
 # Configuración de editores/IDEs
 .vscode/

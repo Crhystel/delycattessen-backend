@@ -143,3 +143,24 @@ class ParentalControl(models.Model):
     class Meta:
         verbose_name = _('parental control')
         verbose_name_plural = _('parental controls')
+
+
+class UserBiometric(models.Model):
+    """Stores encrypted facial embeddings for student or teacher identification.
+    Strictly complies with Data Protection Laws: NO raw photos are stored."""
+    user = models.OneToOneField(
+        CustomUser, verbose_name=_('user'), on_delete=models.CASCADE, related_name='biometric'
+    )
+    encrypted_embedding = models.BinaryField(_('encrypted embedding'))
+    nonce = models.BinaryField(_('encryption nonce'), max_length=12)
+    tag = models.BinaryField(_('encryption auth tag'), max_length=16)
+    is_active = models.BooleanField(_('is active'), default=True)
+    created_at = models.DateTimeField(_('created at'), auto_now_add=True)
+    updated_at = models.DateTimeField(_('updated at'), auto_now=True)
+
+    def __str__(self) -> str:
+        return f"Biometric profile for {self.user.username}"
+
+    class Meta:
+        verbose_name = _('user biometric')
+        verbose_name_plural = _('user biometrics')

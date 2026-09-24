@@ -2,6 +2,7 @@ from django.urls import path
 from rest_framework.routers import DefaultRouter
 from .views import (
     ChildrenListView,
+    ChildPhotoUpdateView,
     ParentRegistrationView,
     StudentRegistrationView,
     StaffViewSet,
@@ -16,6 +17,8 @@ from .views import (
     SetPaymentPinView,
     VerifyPaymentPinView,
     ParentalControlView,
+    DynamicQrTokenView,
+    RegisterBiometricView,
 )
 from rest_framework_simplejwt.views import TokenRefreshView
 
@@ -32,10 +35,13 @@ urlpatterns = [
     path('login/', EmailTokenObtainPairView.as_view(), name='login'),
     path('login/refresh/', TokenRefreshView.as_view(), name='login-refresh'),
     path('children/', ChildrenListView.as_view(), name='children_list'),
+    path('children/<int:student_id>/photo/', ChildPhotoUpdateView.as_view(), name='child_photo_update'),
     path('allergens/', AllergenListView.as_view(), name='allergen_list'),
     path('allergies/',UserAllergyListView.as_view(), name='user_allergies'),
     path('students/<int:student_id>/allergies/', StudentAllergyView.as_view(), name='student-allergies'),
     path('students/<int:student_id>/parental-control/', ParentalControlView.as_view(), name='student-parental-control'),
     path('set-payment-pin/', SetPaymentPinView.as_view(), name='set-payment-pin'),
     path('verify-payment-pin/', VerifyPaymentPinView.as_view(), name='verify-payment-pin'),
-] + router.urls
+    path('qr/token/', DynamicQrTokenView.as_view(), name='user-qr-token'),
+    path('biometrics/register/', RegisterBiometricView.as_view(), name='user-biometrics-register'),
+] + router.urls

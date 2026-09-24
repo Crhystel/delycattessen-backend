@@ -91,3 +91,166 @@ class PreOrderCreateView(AllergenValidatorMixin, ParentalControlValidatorMixin, 
             {"mensaje": _("Preorden creada exitosamente."), "pre_order_id": pre_order.id},
             status=status.HTTP_201_CREATED
         )
+
+
+import jwt
+from django.conf import settings
+from django.core.cache import cache
+from rest_framework.views import APIView
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
+from users.permissions import IsOperativeUser
+from users.models import CustomUser
+from .mixins import BiometricValidationMixin
+
+def _build_identified_user_payload(user: CustomUser, method: str) -> dict:
+    """Constructs the standard user summary response for POS checkout."""
+    balance = "0.00"
+    allergies = []
+    student_id = None
+
+    if hasattr(user, 'student_profile'):
+        student_profile = user.student_profile
+        student_id = student_profile.id
+        allergies = [a.name for a in student_profile.allergies.all()]
+        if hasattr(student_profile, 'wallet'):
+            balance = str(student_profile.wallet.balance)
+    elif hasattr(user, 'wallet'):
+        balance = str(user.wallet.balance)
+
+    # Also check UserAllergy model
+    user_allergies = [ua.allergen.name for ua in user.allergies.all()]
+    all_allergies = sorted(list(set(allergies + user_allergies)))
+
+    full_name = f"{user.first_name} {user.last_name}".strip()
+    if not full_name:
+        full_name = user.username
+
+    return {
+        "user_id": user.id,
+        "student_id": student_id,
+        "username": user.username,
+        "full_name": full_name,
+        "role": user.role,
+        "institution": user.institution.name if user.institution else None,
+        "balance": balance,
+        "allergies": all_allergies,
+        "identification_method": method,
+    }
+
+
+class POSFaceIdentificationView(BiometricValidationMixin, APIView):
+    """
+    POST /api/pos/identify/face/
+    Receives camera frame from POS, extracts facial embedding in volatile memory,
+    destroys raw image immediately, and matches against registered encrypted biometrics.
+    Strictly protected for OPERATIONS_STAFF.
+    """
+    permission_classes = [IsOperativeUser]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request, *args, **kwargs):
+        photo = request.FILES.get('photo')
+        if not photo:
+            return Response(
+                {"detail": _("Debe enviar una captura de rostro en el campo 'photo'.")},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 1. Extract embedding and wipe image memory
+        try:
+            candidate_embedding = self.extract_face_embedding(photo)
+        except Exception as e:
+            return Response(
+                {"detail": f"Error al procesar rasgos faciales: {str(e)}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 2. Match against encrypted vectors in database
+        matched_user, similarity = self.match_face(candidate_embedding, threshold=0.40)
+        print(f"[BIOMETRIC POS] Best candidate score: {similarity:.4f} (threshold: 0.40), Matched: {matched_user}")
+
+        if not matched_user:
+            return Response(
+                {
+                    "detail": _("No se pudo identificar al usuario por biometría facial."),
+                    "suggestion": _("Por favor, utilice la vista de contingencia con código QR.")
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        return Response(
+            _build_identified_user_payload(matched_user, method="FACE_RECOGNITION"),
+            status=status.HTTP_200_OK
+        )
+
+
+class POSQrIdentificationView(APIView):
+    """
+    POST /api/pos/identify/qr/
+    Receives dynamic QR token from POS scanner, validates HMAC-SHA256 signature,
+    expiration (TTL 60s), and single-use nonce to prevent replay attacks.
+    Strictly protected for OPERATIONS_STAFF.
+    """
+    permission_classes = [IsOperativeUser]
+    parser_classes = [JSONParser]
+
+    def post(self, request, *args, **kwargs):
+        token = request.data.get('token')
+        if not token:
+            return Response(
+                {"detail": _("El campo 'token' es obligatorio.")},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 1. Validate JWT signature and expiration
+        try:
+            payload = jwt.decode(token, settings.SECRET_KEY, algorithms=['HS256'])
+        except jwt.ExpiredSignatureError:
+            return Response(
+                {"detail": _("El código QR ha expirado. El estudiante debe refrescar su pantalla.")},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except jwt.InvalidTokenError:
+            return Response(
+                {"detail": _("Código QR inválido o alterado.")},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if payload.get('type') != 'pos_dynamic_qr':
+            return Response(
+                {"detail": _("Tipo de token no válido para identificación POS.")},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 2. Check and invalidate single-use nonce
+        nonce = payload.get('nonce')
+        if not nonce:
+            return Response(
+                {"detail": _("Token sin identificador único.")},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        cache_key = f"used_qr_nonce_{nonce}"
+        if cache.get(cache_key):
+            return Response(
+                {"detail": _("Este código QR ya fue utilizado. No se permite suplantación.")},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        # Mark nonce as used for 5 minutes
+        cache.set(cache_key, True, timeout=300)
+
+        # 3. Retrieve user
+        user_id = payload.get('user_id')
+        try:
+            user = CustomUser.objects.select_related('institution').get(pk=user_id, is_active=True)
+        except CustomUser.DoesNotExist:
+            return Response(
+                {"detail": _("Usuario no encontrado o inactivo.")},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        return Response(
+            _build_identified_user_payload(user, method="DYNAMIC_QR"),
+            status=status.HTTP_200_OK
+        )
+
