@@ -260,7 +260,7 @@ from pos.mixins import BiometricValidationMixin
 class DynamicQrTokenView(APIView):
     """
     GET /api/users/qr/token/
-    Generates a dynamic, time-sensitive QR token (valid for 60 seconds)
+    Generates a dynamic, time-sensitive QR token (valid for 300 seconds / 5 minutes)
     for the authenticated student or teacher, preventing spoofing with a single-use nonce.
     Also returns the user's fresh wallet balance and profile summary for the contingency view.
     """
@@ -269,7 +269,7 @@ class DynamicQrTokenView(APIView):
     def get(self, request):
         user = request.user
         now = datetime.now(timezone.utc)
-        ttl_seconds = 60
+        ttl_seconds = 300
         nonce = uuid.uuid4().hex
 
         payload = {

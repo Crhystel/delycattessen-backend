@@ -253,8 +253,8 @@ class POSQrIdentificationView(APIView):
                 {"detail": _("Este código QR ya fue utilizado. No se permite suplantación.")},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        # Mark nonce as used for 5 minutes
-        cache.set(cache_key, True, timeout=300)
+        # Mark nonce as used for 6 minutes (safely covers 5-minute token TTL)
+        cache.set(cache_key, True, timeout=360)
 
         # 3. Retrieve user
         user_id = payload.get('user_id')
