@@ -10,6 +10,7 @@ from users.models import StudentProfile
 from wallet.models import Wallet, Transaction
 from catalog.models import MenuItem
 from rest_framework.exceptions import ValidationError
+from rest_framework.generics import get_object_or_404
 
 class PreOrderCreateView(AllergenValidatorMixin, ParentalControlValidatorMixin, generics.CreateAPIView):
     serializer_class = PreOrderCreateSerializer
@@ -298,4 +299,31 @@ class POSQrIdentificationView(APIView):
         return Response(
             _build_identified_user_payload(user, method="DYNAMIC_QR"),
             status=status.HTTP_200_OK
+        )
+
+class PreOrderDeliverView(APIView):
+    """
+    PATCH /api/pos/preorders/<int:pre_order_id>/deliver/
+    Marca como entregada una preorden pendiente, confirmada por el personal
+    operativo tras identificar al estudiante en el POS. Solo puede
+    entregarse una preorden que esté en estado PENDING.
+    """
+    permission_classes = [IsOperativeUser]
+
+    def patch(self, request, pre_order_id):
+        pre_order = get_object_or_404(PreOrder, pk=pre_order_id)
+        if pre_order.status != PreOrder.Status.PENDING:
+            return Response(
+                {"detail": _("Esta preorden no está pendiente de entrega.")},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        pre_order.status = PreOrder.Status.DELIVERED
+        pre_order.save(update_fields=['status'])
+        return Response(
+            {
+                "detail": _("Pedido marcado como entregado."),
+                "pre_order_id": pre_order.id,
+                "status": pre_order.status,
+            },
+            status=status.HTTP_200_OK,
         )
