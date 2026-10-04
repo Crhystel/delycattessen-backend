@@ -19,20 +19,37 @@ class AllergenCreateSerializer(serializers.ModelSerializer):
         return value
     
 class IngredientSerializer(serializers.ModelSerializer):
+    """`allergens_reviewed` is read-only: it's flipped to True automatically
+    whenever a request explicitly sets `allergens` (see update()), so an
+    admin marking "sin alérgenos conocidos" with an empty list still counts
+    as a deliberate review — never silently left unreviewed."""
+
     class Meta:
         model = Ingredient
-        fields = ['id', 'name', 'description', 'allergens']
+        fields = ['id', 'name', 'description', 'allergens', 'allergens_reviewed']
+        read_only_fields = ['allergens_reviewed']
+
+    def update(self, instance, validated_data):
+        if 'allergens' in self.initial_data:
+            validated_data['allergens_reviewed'] = True
+        return super().update(instance, validated_data)
 
 
 class IngredientCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Ingredient
-        fields = ['id', 'name', 'description', 'allergens']
+        fields = ['id', 'name', 'description', 'allergens', 'allergens_reviewed']
+        read_only_fields = ['allergens_reviewed']
 
     def validate_name(self, value):
         if Ingredient.objects.filter(name__iexact=value).exists():
             raise serializers.ValidationError('Ya existe un ingrediente con ese nombre.')
         return value
+
+    def create(self, validated_data):
+        if 'allergens' in self.initial_data:
+            validated_data['allergens_reviewed'] = True
+        return super().create(validated_data)
 
 
 class MenuItemSerializer(IngredientValidationMixin, serializers.ModelSerializer):
@@ -40,7 +57,16 @@ class MenuItemSerializer(IngredientValidationMixin, serializers.ModelSerializer)
     NEVER set directly by the client — it's auto-computed as the union of
     the selected ingredients' allergens, so allergen safety never depends
     on an admin remembering to tag it manually. On read, both fields
-    return nested objects (id + name), not bare ids."""
+    return nested objects (id + name), not bare ids.
+
+    is_active/is_visible are declared explicitly (instead of relying on
+    ModelSerializer's automatic introspection) because DRF's default
+    handling for BooleanField can be unreliable on multipart/form-data
+    requests — without this, a new product created with an image upload
+    could come back with both False despite the model's default=True."""
+
+    is_active = serializers.BooleanField(default=True, required=False)
+    is_visible = serializers.BooleanField(default=True, required=False)
 
     class Meta:
         model = MenuItem

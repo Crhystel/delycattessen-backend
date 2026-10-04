@@ -72,6 +72,14 @@ class Transaction(models.Model):
         blank=True,
         help_text=_('Transaction ID returned by Kushki/Payphone.'),
     )
+    pre_order = models.ForeignKey(
+        'pos.PreOrder',
+        verbose_name=_('pre-order'),
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='transactions',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

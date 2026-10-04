@@ -112,7 +112,9 @@ class WalletTransactionListView(APIView):
         wallet = get_object_or_404(Wallet, pk=wallet_id)
         self.check_object_permissions(request, wallet)
 
-        transactions = wallet.transactions.all()[:10]
+        transactions = wallet.transactions.select_related('pre_order').prefetch_related(
+            'pre_order__items__menu_item'
+        )[:10]
         serializer = TransactionSerializer(transactions, many=True)
         return Response(serializer.data)
 

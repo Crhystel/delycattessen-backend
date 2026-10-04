@@ -17,6 +17,17 @@ class Ingredient(models.Model):
     name = models.CharField(_('name'), max_length=100, unique=True)
     description = models.TextField(_('description'), blank=True)
     allergens = models.ManyToManyField(Allergen, blank=True, related_name='ingredients')
+    allergens_reviewed = models.BooleanField(
+        _('allergens reviewed'),
+        default=False,
+        help_text=_(
+            'True once an admin has explicitly confirmed this ingredient\'s '
+            'allergens (even confirming it has none). Stays False for '
+            'newly created ingredients until someone reviews it — this is '
+            'what MenuItemSerializer checks before allowing a product to '
+            'be saved with this ingredient.'
+        ),
+    )
 
     class Meta:
         verbose_name = _('ingredient')
@@ -42,8 +53,7 @@ class MenuItem(models.Model):
         verbose_name_plural = _('menu items')
 
     def save(self, *args, **kwargs):
-        if self.stock <= 0:
-            self.is_visible = False
+        self.is_visible = self.stock > 0
         super().save(*args, **kwargs)
 
     def __str__(self):

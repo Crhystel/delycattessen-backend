@@ -2,7 +2,7 @@ from rest_framework import generics, status
 from rest_framework.response import Response
 from django.db import transaction
 from django.utils.translation import gettext_lazy as _
-from .serializers import PreOrderCreateSerializer
+from .serializers import PreOrderCreateSerializer, PreOrderListSerializer
 from .models import PreOrder, PreOrderItem
 from .mixins import AllergenValidatorMixin, ParentalControlValidatorMixin
 from users.permissions import IsParentUser
@@ -19,78 +19,100 @@ class PreOrderCreateView(AllergenValidatorMixin, ParentalControlValidatorMixin, 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        validated_data = serializer.validated_data
 
-        student_id = serializer.validated_data['student_id']
-        items_data = serializer.validated_data['items']
+        student_id = validated_data['student_id']
+        items_data = validated_data['items']
 
-        # Verificar que el estudiante pertenece al padre logueado
-        try:
-            student = StudentProfile.objects.get(id=student_id, parent__user=request.user)
-        except StudentProfile.DoesNotExist:
-            raise ValidationError(_('El estudiante no existe o no te pertenece.'))
+        student = StudentProfile.objects.select_related('wallet').get(id=student_id)
+        wallet = student.wallet
 
-        # Recuperar y bloquear la billetera (ACID)
-        try:
-            wallet = Wallet.objects.select_for_update().get(student=student)
-        except Wallet.DoesNotExist:
-            raise ValidationError(_('El estudiante no tiene una billetera configurada.'))
-
-        menu_items = []
+        # (menu_item, quantity) por cada línea del pedido. select_for_update
+        # bloquea la fila hasta que termine la transacción, para que dos
+        # ventas simultáneas del mismo producto no dejen el stock negativo.
+        order_lines = []
         total_amount = 0
-
-        # Calcular totales y preparar items
         for item_data in items_data:
             item_id = item_data.get('menu_item_id')
             quantity = int(item_data.get('quantity', 1))
-            
-            menu_item = MenuItem.objects.get(id=item_id)
+            menu_item = MenuItem.objects.select_for_update().get(id=item_id)
+
             if not menu_item.is_active:
                 raise ValidationError(_('El producto "%s" no está disponible.') % menu_item.name)
-            
-            menu_items.append(menu_item)
+
+            if menu_item.stock < quantity:
+                raise ValidationError(
+                    _('No hay suficiente stock de "%(product)s". Disponible: %(stock)s, solicitado: %(quantity)s') % {
+                        'product': menu_item.name,
+                        'stock': menu_item.stock,
+                        'quantity': quantity,
+                    }
+                )
+
+            order_lines.append((menu_item, quantity))
             total_amount += menu_item.price * quantity
 
-        # Validar alérgenos usando el Mixin
-        self.validate_allergens(student, menu_items)
+        self.validate_allergens(student, [menu_item for menu_item, _quantity in order_lines])
 
-        # Validar saldo
         if wallet.balance < total_amount:
-            raise ValidationError(_('Saldo insuficiente. Tienes $%(balance)s y el total es $%(total)s') % {
-                'balance': wallet.balance, 'total': total_amount
-            })
+            raise ValidationError(
+                _('Saldo insuficiente. Tienes $%(balance)s y el total es $%(total)s') % {
+                    'balance': wallet.balance,
+                    'total': total_amount,
+                }
+            )
 
-        # Descontar saldo y crear transacción
         wallet.balance -= total_amount
         wallet.save()
+
+        pre_order = PreOrder.objects.create(
+            student=student,
+            total_amount=total_amount,
+            status=PreOrder.Status.PENDING,
+        )
+
+        for menu_item, quantity in order_lines:
+            PreOrderItem.objects.create(
+                pre_order=pre_order,
+                menu_item=menu_item,
+                quantity=quantity,
+                price_at_purchase=menu_item.price,
+            )
+            menu_item.stock -= quantity
+            menu_item.save()
 
         Transaction.objects.create(
             wallet=wallet,
             amount=total_amount,
             status=Transaction.Status.SUCCESS,
-            type=Transaction.Type.CONSUMPTION
+            type=Transaction.Type.CONSUMPTION,
+            pre_order=pre_order,
         )
-
-        # Crear PreOrden
-        pre_order = PreOrder.objects.create(
-            student=student,
-            total_amount=total_amount,
-            status=PreOrder.Status.PENDING
-        )
-
-        # Crear Items de la PreOrden
-        for item_data in items_data:
-            menu_item = MenuItem.objects.get(id=item_data.get('menu_item_id'))
-            PreOrderItem.objects.create(
-                pre_order=pre_order,
-                menu_item=menu_item,
-                quantity=int(item_data.get('quantity', 1)),
-                price_at_purchase=menu_item.price
-            )
 
         return Response(
             {"mensaje": _("Preorden creada exitosamente."), "pre_order_id": pre_order.id},
-            status=status.HTTP_201_CREATED
+            status=status.HTTP_201_CREATED,
         )
+class PreOrderListView(generics.ListAPIView):
+    """
+    GET /api/pos/preorders/?student_id=<id>  (student_id es opcional)
+    Lista las preórdenes (pendientes, entregadas, canceladas) de los hijos
+    del padre autenticado, más recientes primero. Si se pasa student_id,
+    filtra solo ese hijo (igual queda restringido a los hijos del padre).
+    """
+    serializer_class = PreOrderListSerializer
+    permission_classes = [IsParentUser]
+
+    def get_queryset(self):
+        queryset = PreOrder.objects.filter(
+            student__parent=self.request.user.parent_profile
+        ).select_related('student__user').prefetch_related('items__menu_item')
+
+        student_id = self.request.query_params.get('student_id')
+        if student_id:
+            queryset = queryset.filter(student_id=student_id)
+
+        return queryset.order_by('-created_at')
 
 
 import jwt
@@ -117,10 +139,6 @@ def _build_identified_user_payload(user: CustomUser, method: str) -> dict:
     elif hasattr(user, 'wallet'):
         balance = str(user.wallet.balance)
 
-    # Also check UserAllergy model
-    user_allergies = [ua.allergen.name for ua in user.allergies.all()]
-    all_allergies = sorted(list(set(allergies + user_allergies)))
-
     full_name = f"{user.first_name} {user.last_name}".strip()
     if not full_name:
         full_name = user.username
@@ -133,10 +151,9 @@ def _build_identified_user_payload(user: CustomUser, method: str) -> dict:
         "role": user.role,
         "institution": user.institution.name if user.institution else None,
         "balance": balance,
-        "allergies": all_allergies,
+        "allergies": sorted(set(allergies)),
         "identification_method": method,
     }
-
 
 class POSFaceIdentificationView(BiometricValidationMixin, APIView):
     """
@@ -253,4 +270,3 @@ class POSQrIdentificationView(APIView):
             _build_identified_user_payload(user, method="DYNAMIC_QR"),
             status=status.HTTP_200_OK
         )
-

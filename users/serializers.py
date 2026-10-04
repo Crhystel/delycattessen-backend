@@ -6,7 +6,8 @@ from django.contrib.auth.tokens import default_token_generator
 from django.db import transaction
 from django.core.cache import cache
 from django.utils.translation import gettext_lazy as _
-from .models import Institution, ParentProfile, StudentProfile, CustomUser, Allergen, UserAllergy
+from .models import Institution, ParentProfile, StudentProfile, CustomUser
+from catalog.models import Allergen
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from .mixins import UppercaseNamesMixin
 from .fields import PasswordField
@@ -293,12 +294,7 @@ class AllergenSerializer(serializers.ModelSerializer):
     class Meta:
         model = Allergen
         fields = ('id','name')
-        
-class UserAllergySerializer(serializers.ModelSerializer):
-    allergen_name = serializers.CharField(source='allergen.name', read_only=True)
-    class Meta:
-        model = UserAllergy
-        fields = ('id', 'allergen', 'allergen_name')
+    
 
 class SetPaymentPinSerializer(serializers.Serializer):
     pin = serializers.RegexField(regex=r'^\d{4}$', error_messages={'invalid': 'El PIN debe tener exactamente 4 dígitos.'})

@@ -17,14 +17,14 @@ from .serializers import (
     InstitutionSerializer,
     MeSerializer,
     AllergenSerializer,
-    UserAllergySerializer,
     EmailTokenObtainSerializer,
     SetPaymentPinSerializer,
     VerifyPaymentPinSerializer,
 )
 from .permissions import IsAdministrator, IsParentUser, SameInstitutionPermission, CanRequestPasswordReset, CanManageAllergies, IsParentOfStudent
 from .mixins import InstitutionScopeMixin, TokenGeneratorMixin
-from .models import CustomUser, Institution, Allergen, UserAllergy, StudentProfile
+from .models import CustomUser, Institution, StudentProfile
+from catalog.models import Allergen
 from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.tokens import RefreshToken
 
@@ -187,27 +187,7 @@ class AllergenListView(generics.ListAPIView):
     queryset = Allergen.objects.all().order_by('name')
     serializer_class = AllergenSerializer
     permission_classes = [IsAuthenticated]
-    
-class UserAllergyListView(APIView):
-    """GET/PUT /api/users/allergies/?target_user_id=<id>
-    PUT replaces complete list of alergies from user"""
-    permission_classes = [IsAuthenticated, CanManageAllergies]
-
-    def get(self, request):
-        target_user_id = request.query_params.get('target_user_id')
-        allergies = UserAllergy.objects.filter(user_id=target_user_id).select_related('allergen')
-        return Response(UserAllergySerializer(allergies, many=True).data)
-
-    def put(self, request):
-        target_user_id = request.data.get('target_user_id')
-        allergen_ids = request.data.get('allergen_ids', [])
-        UserAllergy.objects.filter(user_id=target_user_id).delete()
-        UserAllergy.objects.bulk_create([
-            UserAllergy(user_id=target_user_id, allergen_id=aid) for aid in allergen_ids
-        ])
-        allergies = UserAllergy.objects.filter(user_id=target_user_id).select_related('allergen')
-        return Response(UserAllergySerializer(allergies, many=True).data)
-    
+       
 class StudentAllergyView(APIView):
     """GET/PUT /api/users/students/<student_id>/allergies/"""
 
@@ -221,8 +201,16 @@ class StudentAllergyView(APIView):
         student = get_object_or_404(StudentProfile, pk=student_id)
         allergen_ids = request.data.get('allergen_ids', [])
         student.allergies.set(allergen_ids)
-        return Response(AllergenSerializer(student.allergies.all(), many=True).data)
 
+        allergies = student.allergies.all()
+        # An allergen with no MenuItem tagged can't be blocked by the POS yet,
+        # so the parent gets a heads-up instead of a false sense of protection.
+        unprotected = [a.name for a in allergies if not a.menu_items.exists()]
+
+        return Response({
+            'allergies': AllergenSerializer(allergies, many=True).data,
+            'unprotected_allergens': unprotected,
+        })
 class SetPaymentPinView(APIView):
     """POST /api/users/set-payment-pin/ — the dad creates or changes his PIN"""
 

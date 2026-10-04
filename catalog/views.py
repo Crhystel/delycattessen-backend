@@ -17,7 +17,12 @@ class MenuListView(generics.ListAPIView):
 
 
 class AdminMenuListView(generics.ListAPIView):
-    queryset = MenuItem.objects.all().order_by('name')
+    """Only active products: a "deleted" (is_active=False) product should
+    disappear from the admin catalog too, not just from the parent-facing
+    menu. The row stays in the database so historical PreOrderItem records
+    keep a valid reference — see MenuItemDetailView.perform_destroy."""
+
+    queryset = MenuItem.objects.filter(is_active=True).order_by('name')
     serializer_class = MenuItemSerializer
     permission_classes = [IsAdminUser]
 
@@ -29,9 +34,20 @@ class MenuItemCreateView(generics.CreateAPIView):
 
 
 class MenuItemDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """DELETE never hard-deletes: it soft-deletes by flipping is_active
+    (and is_visible) to False. A real DB delete would fail anyway once the
+    product has any PreOrderItem history (FK is on_delete=PROTECT), and
+    even for a brand-new product with zero orders, soft delete keeps the
+    behavior consistent and predictable for the admin."""
+
     queryset = MenuItem.objects.all()
     serializer_class = MenuItemSerializer
     permission_classes = [IsAdminUser]
+
+    def perform_destroy(self, instance):
+        instance.is_active = False
+        instance.is_visible = False
+        instance.save()
 
 
 class IngredientListView(generics.ListAPIView):

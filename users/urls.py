@@ -11,7 +11,6 @@ from .views import (
     InstitutionListView,
     MeView,
     EmailTokenObtainPairView,
-    UserAllergyListView,
     AllergenListView,
     StudentAllergyView,
     SetPaymentPinView,
@@ -37,11 +36,10 @@ urlpatterns = [
     path('children/', ChildrenListView.as_view(), name='children_list'),
     path('children/<int:student_id>/photo/', ChildPhotoUpdateView.as_view(), name='child_photo_update'),
     path('allergens/', AllergenListView.as_view(), name='allergen_list'),
-    path('allergies/',UserAllergyListView.as_view(), name='user_allergies'),
     path('students/<int:student_id>/allergies/', StudentAllergyView.as_view(), name='student-allergies'),
     path('students/<int:student_id>/parental-control/', ParentalControlView.as_view(), name='student-parental-control'),
     path('set-payment-pin/', SetPaymentPinView.as_view(), name='set-payment-pin'),
     path('verify-payment-pin/', VerifyPaymentPinView.as_view(), name='verify-payment-pin'),
     path('qr/token/', DynamicQrTokenView.as_view(), name='user-qr-token'),
     path('biometrics/register/', RegisterBiometricView.as_view(), name='user-biometrics-register'),
-] + router.urls
+] + router.urls
