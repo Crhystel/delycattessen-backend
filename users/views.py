@@ -20,6 +20,7 @@ from .serializers import (
     EmailTokenObtainSerializer,
     SetPaymentPinSerializer,
     VerifyPaymentPinSerializer,
+    ChangePasswordSerializer,
 )
 from .permissions import IsAdministrator, IsParentUser, SameInstitutionPermission, CanRequestPasswordReset, CanManageAllergies, IsParentOfStudent
 from .mixins import InstitutionScopeMixin, TokenGeneratorMixin
@@ -357,3 +358,16 @@ class RegisterBiometricView(BiometricValidationMixin, APIView):
             "username": target_user.username,
         }, status=status.HTTP_201_CREATED)
 
+class ChangePasswordView(BasePasswordResetView):
+    """POST /api/users/change-password/ — el usuario autenticado define una
+    contraseña propia. Se usa para el cambio obligatorio tras el primer
+    login (must_change_password=True) y sirve como cambio de contraseña en
+    general. Sigue el mismo Template Method que el resto del flujo de
+    contraseñas (BasePasswordResetView.post ya valida y arma la respuesta;
+    aquí solo se define el paso que varía)."""
+    serializer_class = ChangePasswordSerializer
+    permission_classes = [IsAuthenticated]
+    success_message = _('Contraseña actualizada correctamente.')
+
+    def process_recovery_action(self, serializer):
+        serializer.save()

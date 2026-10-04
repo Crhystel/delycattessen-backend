@@ -129,13 +129,39 @@ def _build_identified_user_payload(user: CustomUser, method: str) -> dict:
     balance = "0.00"
     allergies = []
     student_id = None
+    institution = user.institution  # default: staff/teacher institution
+    pending_orders = []
 
     if hasattr(user, 'student_profile'):
         student_profile = user.student_profile
         student_id = student_profile.id
         allergies = [a.name for a in student_profile.allergies.all()]
+        # A student's institution lives on StudentProfile, not on the
+        # CustomUser itself (that field is only populated for staff).
+        institution = student_profile.institution
         if hasattr(student_profile, 'wallet'):
             balance = str(student_profile.wallet.balance)
+
+        pending_preorders = PreOrder.objects.filter(
+            student=student_profile, status=PreOrder.Status.PENDING
+        ).prefetch_related('items__menu_item').order_by('created_at')
+
+        pending_orders = [
+            {
+                "pre_order_id": pre_order.id,
+                "total_amount": str(pre_order.total_amount),
+                "created_at": pre_order.created_at.isoformat(),
+                "items": [
+                    {
+                        "menu_item_name": item.menu_item.name,
+                        "quantity": item.quantity,
+                        "price_at_purchase": str(item.price_at_purchase),
+                    }
+                    for item in pre_order.items.all()
+                ],
+            }
+            for pre_order in pending_preorders
+        ]
     elif hasattr(user, 'wallet'):
         balance = str(user.wallet.balance)
 
@@ -149,9 +175,10 @@ def _build_identified_user_payload(user: CustomUser, method: str) -> dict:
         "username": user.username,
         "full_name": full_name,
         "role": user.role,
-        "institution": user.institution.name if user.institution else None,
+        "institution": institution.name if institution else None,
         "balance": balance,
         "allergies": sorted(set(allergies)),
+        "pending_orders": pending_orders,
         "identification_method": method,
     }
 
@@ -259,7 +286,9 @@ class POSQrIdentificationView(APIView):
         # 3. Retrieve user
         user_id = payload.get('user_id')
         try:
-            user = CustomUser.objects.select_related('institution').get(pk=user_id, is_active=True)
+            user = CustomUser.objects.select_related(
+                'institution', 'student_profile', 'student_profile__institution', 'student_profile__wallet'
+            ).get(pk=user_id, is_active=True)
         except CustomUser.DoesNotExist:
             return Response(
                 {"detail": _("Usuario no encontrado o inactivo.")},

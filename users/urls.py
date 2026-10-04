@@ -1,6 +1,7 @@
 from django.urls import path
 from rest_framework.routers import DefaultRouter
 from .views import (
+    ChangePasswordView,
     ChildrenListView,
     ChildPhotoUpdateView,
     ParentRegistrationView,
@@ -42,4 +43,5 @@ urlpatterns = [
     path('verify-payment-pin/', VerifyPaymentPinView.as_view(), name='verify_payment_pin'),
     path('qr/token/', DynamicQrTokenView.as_view(), name='user_qr_token'),
     path('biometrics/register/', RegisterBiometricView.as_view(), name='user_biometrics_register'),
+    path('change-password/', ChangePasswordView.as_view(), name='change_password'),
 ] + router.urls

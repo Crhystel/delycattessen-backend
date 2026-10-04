@@ -136,8 +136,10 @@ class MeSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ('id', 'email', 'first_name', 'last_name', 'role', 'institution', 'institution_name', 'has_children', 'has_payment_pin')
-
+        fields = (
+            'id', 'email', 'first_name', 'last_name', 'role', 'institution',
+            'institution_name', 'has_children', 'has_payment_pin', 'must_change_password',
+        )
     def get_has_children(self, obj):
         return hasattr(obj, 'parent_profile') and obj.parent_profile.children.exists()
 
@@ -308,3 +310,29 @@ class ParentalControlSerializer(serializers.ModelSerializer):
     class Meta:
         model = ParentalControl
         fields = ['daily_limit_enabled', 'daily_limit_amount', 'allowed_days_enabled', 'allowed_days']
+        
+class ChangePasswordSerializer(serializers.Serializer):
+    current_password = serializers.CharField(write_only=True, trim_whitespace=False)
+    new_password = PasswordField()
+    confirm_password = serializers.CharField(write_only=True, trim_whitespace=False)
+
+    def validate_current_password(self, value):
+        user = self.context['request'].user
+        if not user.check_password(value):
+            raise serializers.ValidationError(_('La contraseña actual es incorrecta.'))
+        return value
+
+    def validate(self, attrs):
+        if attrs['new_password'] != attrs['confirm_password']:
+            raise serializers.ValidationError({'confirm_password': _('Las contraseñas no coinciden.')})
+        if attrs['new_password'] == attrs['current_password']:
+            raise serializers.ValidationError({'new_password': _('La nueva contraseña debe ser diferente a la actual.')})
+        return attrs
+
+    @transaction.atomic
+    def save(self, **kwargs):
+        user = self.context['request'].user
+        user.set_password(self.validated_data['new_password'])
+        user.must_change_password = False
+        user.save(update_fields=['password', 'must_change_password'])
+        return user
