@@ -12,8 +12,8 @@ app_name = 'wallet'
 
 urlpatterns = [
     path('recharge/', WalletRechargeView.as_view(), name='recharge'),
-    path('payphone/callback/', PayphoneCallbackView.as_view(), name='payphone-callback'),
+    path('payphone/callback/', PayphoneCallbackView.as_view(), name='payphone_callback'),
     path('<int:wallet_id>/transactions/', WalletTransactionListView.as_view(), name='transactions'),
-    path('payphone/redirect/', PayphoneRedirectView.as_view(), name='payphone-redirect'),
-    path('kushki/webhook/', KushkiWebhookView.as_view(), name='kushki-webhook'),
+    path('payphone/redirect/', PayphoneRedirectView.as_view(), name='payphone_redirect'),
+    path('kushki/webhook/', KushkiWebhookView.as_view(), name='kushki_webhook'),
 ]
