@@ -1,5 +1,6 @@
 from rest_framework import generics
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
+from users.permissions import IsAdministrator
 from .models import MenuItem, Ingredient, Allergen
 from .serializers import (
     MenuItemSerializer,
@@ -53,13 +54,13 @@ class MenuItemDetailView(generics.RetrieveUpdateDestroyAPIView):
 class IngredientListView(generics.ListAPIView):
     queryset = Ingredient.objects.all()
     serializer_class = IngredientSerializer
-    permission_classes = [IsAdminUser]
+    permission_classes = [IsAdministrator | IsAdminUser]
 
 
 class IngredientCreateView(generics.CreateAPIView):
     queryset = Ingredient.objects.all()
     serializer_class = IngredientCreateSerializer
-    permission_classes = [IsAdminUser]
+    permission_classes = [IsAdministrator | IsAdminUser]
 
 
 class IngredientDetailView(generics.RetrieveUpdateAPIView):
@@ -68,7 +69,7 @@ class IngredientDetailView(generics.RetrieveUpdateAPIView):
 
     queryset = Ingredient.objects.all()
     serializer_class = IngredientSerializer
-    permission_classes = [IsAdminUser]
+    permission_classes = [IsAdministrator | IsAdminUser]
 
 
 class AllergenListView(generics.ListAPIView):
