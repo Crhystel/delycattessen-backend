@@ -193,3 +193,87 @@ class DailyMenuUpdateSerializer(serializers.Serializer):
                 _('Uno o más platillos no existen, están inactivos o no pertenecen a su institución.')
             )
         return value
+
+
+class StudentMenuDishSerializer(serializers.ModelSerializer):
+    """
+    Serializes a MenuDish for parent consultation with student-specific allergen detection
+    and absolute image URLs.
+    """
+    price = serializers.DecimalField(max_digits=6, decimal_places=2)
+    allergens = serializers.SerializerMethodField()
+    has_student_allergens = serializers.SerializerMethodField()
+    image = serializers.SerializerMethodField()
+
+    class Meta:
+        model = MenuDish
+        fields = [
+            'id', 'name', 'description', 'price', 'image',
+            'allergens', 'has_student_allergens',
+        ]
+
+    def get_allergens(self, obj) -> list[str]:
+        return [a.name for a in obj.allergens.all()]
+
+    def get_has_student_allergens(self, obj) -> bool:
+        student_allergy_ids = self.context.get('student_allergy_ids')
+        if student_allergy_ids is None:
+            student = self.context.get('student')
+            if not student:
+                return False
+            student_allergy_ids = set(student.allergies.values_list('id', flat=True))
+            self.context['student_allergy_ids'] = student_allergy_ids
+        dish_allergy_ids = set(a.id for a in obj.allergens.all())
+        return bool(student_allergy_ids & dish_allergy_ids)
+
+    def get_image(self, obj) -> str | None:
+        if not obj.image:
+            return None
+        request = self.context.get('request')
+        if request:
+            return request.build_absolute_uri(obj.image.url)
+        return obj.image.url
+
+
+class StudentDailyMenuSerializer(serializers.ModelSerializer):
+    """
+    Serializes a DailyMenu for a student's parent, evaluating parental control restrictions.
+    """
+    is_blocked_by_parental_control = serializers.SerializerMethodField()
+    blocked_reason = serializers.SerializerMethodField()
+    dishes = serializers.SerializerMethodField()
+
+    class Meta:
+        model = DailyMenu
+        fields = [
+            'id', 'date', 'is_blocked_by_parental_control',
+            'blocked_reason', 'dishes',
+        ]
+
+    def _get_parental_control_info(self, obj):
+        if hasattr(obj, '_parental_control_info'):
+            return obj._parental_control_info
+
+        student = self.context.get('student')
+        is_blocked = False
+        blocked_reason = None
+
+        if student and hasattr(student, 'parental_control'):
+            control = student.parental_control
+            if control.allowed_days_enabled:
+                if obj.date.weekday() not in control.allowed_days:
+                    is_blocked = True
+                    blocked_reason = "No está permitido comprar para ese día: está bloqueado por el control parental."
+
+        obj._parental_control_info = (is_blocked, blocked_reason)
+        return obj._parental_control_info
+
+    def get_is_blocked_by_parental_control(self, obj) -> bool:
+        return self._get_parental_control_info(obj)[0]
+
+    def get_blocked_reason(self, obj) -> str | None:
+        return self._get_parental_control_info(obj)[1]
+
+    def get_dishes(self, obj):
+        dishes = [d for d in obj.dishes.all() if d.is_active]
+        return StudentMenuDishSerializer(dishes, many=True, context=self.context).data

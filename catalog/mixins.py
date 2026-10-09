@@ -10,7 +10,14 @@ class IngredientValidationMixin:
         if request and request.method in ['POST', 'PUT', 'PATCH']:
             if request.method == 'PATCH' and 'ingredients' not in request.data:
                 return super().validate(attrs)
-            ingredients = request.data.get('ingredients')
+            if hasattr(request.data, 'getlist') and request.data.getlist('ingredients'):
+                ingredients = request.data.getlist('ingredients')
+            else:
+                ingredients = request.data.get('ingredients')
+
+            if not isinstance(ingredients, (list, tuple, set)):
+                ingredients = [ingredients] if ingredients is not None else []
+
             if not ingredients or len(ingredients) == 0:
                 raise ValidationError({'ingredients': 'You must provide at least one ingredient for the product.'})
 

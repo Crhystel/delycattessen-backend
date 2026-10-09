@@ -1,3 +1,6 @@
+from decimal import Decimal
+import zoneinfo
+from datetime import datetime
 from rest_framework import generics, status
 from rest_framework.response import Response
 from django.db import transaction
@@ -8,7 +11,7 @@ from .mixins import AllergenValidatorMixin, ParentalControlValidatorMixin
 from users.permissions import IsParentUser
 from users.models import StudentProfile
 from wallet.models import Wallet, Transaction
-from catalog.models import MenuItem
+from catalog.models import MenuDish, DailyMenu, MonthlyMenu
 from rest_framework.exceptions import ValidationError
 from rest_framework.generics import get_object_or_404
 
@@ -23,38 +26,68 @@ class PreOrderCreateView(AllergenValidatorMixin, ParentalControlValidatorMixin, 
         validated_data = serializer.validated_data
 
         student_id = validated_data['student_id']
+        delivery_date = validated_data['delivery_date']
         items_data = validated_data['items']
 
-        student = StudentProfile.objects.select_related('wallet').get(id=student_id)
-        wallet = student.wallet
+        try:
+            student = StudentProfile.objects.select_related('institution', 'wallet', 'parent').get(id=student_id)
+        except StudentProfile.DoesNotExist:
+            raise ValidationError({'student_id': _('Estudiante no encontrado.')})
 
-        # (menu_item, quantity) por cada línea del pedido. select_for_update
-        # bloquea la fila hasta que termine la transacción, para que dos
-        # ventas simultáneas del mismo producto no dejen el stock negativo.
+        # 1. El estudiante debe ser hijo del padre autenticado (si no -> 403)
+        parent_profile = getattr(request.user, 'parent_profile', None)
+        if not parent_profile or student.parent_id != parent_profile.id:
+            return Response(
+                {"detail": _("No tienes permiso sobre este estudiante.")},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # 2. Hora de corte: delivery_date > today en America/Guayaquil
+        today_ec = datetime.now(zoneinfo.ZoneInfo('America/Guayaquil')).date()
+        if delivery_date <= today_ec:
+            raise ValidationError(
+                _("No se puede preordenar para hoy o fechas pasadas. La fecha de entrega debe ser posterior a hoy.")
+            )
+
+        # 3. DailyMenu de un MonthlyMenu PUBLICADO de la institución del estudiante
+        try:
+            daily_menu = DailyMenu.objects.select_related('monthly_menu').get(
+                date=delivery_date,
+                monthly_menu__institution=student.institution,
+                monthly_menu__status=MonthlyMenu.Status.PUBLISHED,
+            )
+        except DailyMenu.DoesNotExist:
+            raise ValidationError(
+                _("No hay un menú publicado para esa fecha en la institución del estudiante.")
+            )
+
+        # 4. Platillos disponibles en el menú de esa fecha
+        available_dishes = {dish.id: dish for dish in daily_menu.dishes.filter(is_active=True)}
         order_lines = []
-        total_amount = 0
+        total_amount = Decimal('0.00')
+
         for item_data in items_data:
-            item_id = item_data.get('menu_item_id')
-            quantity = int(item_data.get('quantity', 1))
-            menu_item = MenuItem.objects.select_for_update().get(id=item_id)
+            dish_id = item_data['dish_id']
+            quantity = item_data['quantity']
 
-            if not menu_item.is_active:
-                raise ValidationError(_('El producto "%s" no está disponible.') % menu_item.name)
-
-            if menu_item.stock < quantity:
+            if dish_id not in available_dishes:
                 raise ValidationError(
-                    _('No hay suficiente stock de "%(product)s". Disponible: %(stock)s, solicitado: %(quantity)s') % {
-                        'product': menu_item.name,
-                        'stock': menu_item.stock,
-                        'quantity': quantity,
-                    }
+                    _("El platillo solicitado no está disponible en el menú de esa fecha.")
                 )
 
-            order_lines.append((menu_item, quantity))
-            total_amount += menu_item.price * quantity
+            dish = available_dishes[dish_id]
+            order_lines.append((dish, quantity))
+            total_amount += dish.price * quantity
 
-        self.validate_allergens(student, [menu_item for menu_item, _quantity in order_lines])
+        # 5. Control parental sobre la fecha de entrega
+        self.validate_parental_controls(student, total_amount, target_date=delivery_date)
 
+        # 6. Alérgenos
+        self.validate_allergens(student, [dish for dish, _quantity in order_lines])
+
+        # 7. Saldo en billetera
+        wallet = student.wallet
+        wallet = Wallet.objects.select_for_update().get(id=wallet.id)
         if wallet.balance < total_amount:
             raise ValidationError(
                 _('Saldo insuficiente. Tienes $%(balance)s y el total es $%(total)s') % {
@@ -68,19 +101,18 @@ class PreOrderCreateView(AllergenValidatorMixin, ParentalControlValidatorMixin, 
 
         pre_order = PreOrder.objects.create(
             student=student,
+            daily_menu=daily_menu,
             total_amount=total_amount,
             status=PreOrder.Status.PENDING,
         )
 
-        for menu_item, quantity in order_lines:
+        for dish, quantity in order_lines:
             PreOrderItem.objects.create(
                 pre_order=pre_order,
-                menu_item=menu_item,
+                dish=dish,
                 quantity=quantity,
-                price_at_purchase=menu_item.price,
+                price_at_purchase=dish.price,
             )
-            menu_item.stock -= quantity
-            menu_item.save()
 
         Transaction.objects.create(
             wallet=wallet,
@@ -94,6 +126,8 @@ class PreOrderCreateView(AllergenValidatorMixin, ParentalControlValidatorMixin, 
             {"mensaje": _("Preorden creada exitosamente."), "pre_order_id": pre_order.id},
             status=status.HTTP_201_CREATED,
         )
+
+
 class PreOrderListView(generics.ListAPIView):
     """
     GET /api/pos/preorders/?student_id=<id>  (student_id es opcional)
@@ -107,7 +141,7 @@ class PreOrderListView(generics.ListAPIView):
     def get_queryset(self):
         queryset = PreOrder.objects.filter(
             student__parent=self.request.user.parent_profile
-        ).select_related('student__user').prefetch_related('items__menu_item')
+        ).select_related('student__user', 'daily_menu').prefetch_related('items__dish')
 
         student_id = self.request.query_params.get('student_id')
         if student_id:
@@ -143,18 +177,22 @@ def _build_identified_user_payload(user: CustomUser, method: str) -> dict:
         if hasattr(student_profile, 'wallet'):
             balance = str(student_profile.wallet.balance)
 
+        today_ec = datetime.now(zoneinfo.ZoneInfo('America/Guayaquil')).date()
         pending_preorders = PreOrder.objects.filter(
-            student=student_profile, status=PreOrder.Status.PENDING
-        ).prefetch_related('items__menu_item').order_by('created_at')
+            student=student_profile,
+            status=PreOrder.Status.PENDING,
+            daily_menu__date=today_ec,
+        ).select_related('daily_menu').prefetch_related('items__dish').order_by('created_at')
 
         pending_orders = [
             {
                 "pre_order_id": pre_order.id,
                 "total_amount": str(pre_order.total_amount),
                 "created_at": pre_order.created_at.isoformat(),
+                "delivery_date": str(pre_order.delivery_date),
                 "items": [
                     {
-                        "menu_item_name": item.menu_item.name,
+                        "dish_name": item.dish.name,
                         "quantity": item.quantity,
                         "price_at_purchase": str(item.price_at_purchase),
                     }
@@ -233,7 +271,7 @@ class POSQrIdentificationView(APIView):
     """
     POST /api/pos/identify/qr/
     Receives dynamic QR token from POS scanner, validates HMAC-SHA256 signature,
-    expiration (TTL 60s), and single-use nonce to prevent replay attacks.
+    expiration (TTL 300s), and single-use nonce to prevent replay attacks.
     Strictly protected for OPERATIONS_STAFF.
     """
     permission_classes = [IsOperativeUser]
@@ -306,17 +344,26 @@ class PreOrderDeliverView(APIView):
     PATCH /api/pos/preorders/<int:pre_order_id>/deliver/
     Marca como entregada una preorden pendiente, confirmada por el personal
     operativo tras identificar al estudiante en el POS. Solo puede
-    entregarse una preorden que esté en estado PENDING.
+    entregarse una preorden cuya fecha de entrega sea hoy y esté en estado PENDING.
     """
     permission_classes = [IsOperativeUser]
 
     def patch(self, request, pre_order_id):
-        pre_order = get_object_or_404(PreOrder, pk=pre_order_id)
+        pre_order = get_object_or_404(PreOrder.objects.select_related('daily_menu'), pk=pre_order_id)
         if pre_order.status != PreOrder.Status.PENDING:
             return Response(
                 {"detail": _("Esta preorden no está pendiente de entrega.")},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        today_ec = datetime.now(zoneinfo.ZoneInfo('America/Guayaquil')).date()
+        if pre_order.daily_menu.date != today_ec:
+            formatted_date = pre_order.daily_menu.date.strftime('%d/%m/%Y')
+            return Response(
+                {"detail": _(f"Esta preorden es para el {formatted_date}, no para hoy.")},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         pre_order.status = PreOrder.Status.DELIVERED
         pre_order.save(update_fields=['status'])
         return Response(

@@ -26,32 +26,51 @@ class AllergenValidatorMixin:
 
 from django.utils import timezone
 from decimal import Decimal
+import zoneinfo
+from datetime import datetime
+from django.db.models import Sum
 from wallet.models import Transaction
 
 class ParentalControlValidatorMixin:
-    def validate_parental_controls(self, student, amount):
+    def validate_parental_controls(self, student, amount, target_date=None):
         from users.models import ParentalControl
+        from .models import PreOrder
         try:
             control = student.parental_control
-        except ParentalControl.DoesNotExist:
+        except (ParentalControl.DoesNotExist, AttributeError):
             return
 
+        today_ec = datetime.now(zoneinfo.ZoneInfo('America/Guayaquil')).date()
+        if target_date is None:
+            target_date = today_ec
+
         if control.allowed_days_enabled:
-            current_day = timezone.localtime().weekday()
-            if current_day not in control.allowed_days:
-                raise ValidationError("Compras bloqueadas: Día no habilitado para este estudiante.")
+            # 0 = Monday, ..., 6 = Sunday
+            if target_date.weekday() not in control.allowed_days:
+                raise ValidationError("No está permitido comprar para ese día: está bloqueado por el control parental.")
 
         if control.daily_limit_enabled:
-            today = timezone.localtime().date()
-            transactions = Transaction.objects.filter(
-                wallet=student.wallet,
-                type=Transaction.Type.CONSUMPTION,
-                status=Transaction.Status.SUCCESS,
-                created_at__date=today
-            )
-            spent_today = sum([t.amount for t in transactions])
-            if spent_today + Decimal(str(amount)) > control.daily_limit_amount:
-                raise ValidationError("Compras bloqueadas: Límite diario excedido para este estudiante.")
+            preorders_sum = PreOrder.objects.filter(
+                student=student,
+                daily_menu__date=target_date,
+            ).exclude(
+                status=PreOrder.Status.CANCELED
+            ).aggregate(total=Sum('total_amount'))['total'] or Decimal('0.00')
+
+            if target_date == today_ec:
+                direct_sum = Transaction.objects.filter(
+                    wallet=student.wallet,
+                    type=Transaction.Type.CONSUMPTION,
+                    status=Transaction.Status.SUCCESS,
+                    created_at__date=today_ec,
+                    pre_order__isnull=True,
+                ).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
+            else:
+                direct_sum = Decimal('0.00')
+
+            spent_target_date = preorders_sum + direct_sum
+            if spent_target_date + Decimal(str(amount)) > control.daily_limit_amount:
+                raise ValidationError("La preorden supera el límite de gasto diario configurado para ese día.")
 
 
 import os

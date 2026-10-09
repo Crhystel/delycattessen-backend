@@ -87,12 +87,16 @@ class AllergenCreateView(generics.CreateAPIView):
 
 
 from datetime import datetime
+import zoneinfo
+from django.db.models import Prefetch
 from django.shortcuts import get_object_or_404
 from django.utils.translation import gettext_lazy as _
 from rest_framework import status
 from rest_framework.response import Response
+from rest_framework.views import APIView
 from rest_framework.exceptions import ValidationError
-from users.permissions import IsAdministrator
+from users.models import StudentProfile
+from users.permissions import IsAdministrator, IsParentOfStudent
 from users.mixins import OwnInstitutionMixin
 from .models import MenuDish, MonthlyMenu, DailyMenu
 from .serializers import (
@@ -101,6 +105,7 @@ from .serializers import (
     MonthlyMenuSerializer,
     DailyMenuSerializer,
     DailyMenuUpdateSerializer,
+    StudentDailyMenuSerializer,
 )
 from .services import MonthlyMenuService
 
@@ -245,3 +250,35 @@ class MonthlyMenuUnpublishView(OwnInstitutionMixin, generics.GenericAPIView):
         unpublished_menu = MonthlyMenuService.unpublish(monthly_menu)
         serializer = self.get_serializer(unpublished_menu)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class StudentMonthlyMenuView(APIView):
+    """
+    GET /api/catalog/students/<int:student_id>/monthly_menu/
+    Returns business days (with date > today_ec) from published monthly menus
+    belonging to the student's institution, including dish information, parental
+    control blockers, and allergen alerts for the child.
+    """
+    permission_classes = [IsParentOfStudent]
+
+    def get(self, request, student_id):
+        student = get_object_or_404(
+            StudentProfile.objects.select_related('institution', 'parental_control').prefetch_related('allergies'),
+            id=student_id,
+        )
+        today_ec = datetime.now(zoneinfo.ZoneInfo('America/Guayaquil')).date()
+        days = DailyMenu.objects.filter(
+            monthly_menu__institution=student.institution,
+            monthly_menu__status=MonthlyMenu.Status.PUBLISHED,
+            date__gt=today_ec,
+        ).prefetch_related(
+            Prefetch('dishes', queryset=MenuDish.objects.filter(is_active=True).prefetch_related('allergens'))
+        ).order_by('date')
+
+        context = {
+            'request': request,
+            'student': student,
+            'student_allergy_ids': set(student.allergies.values_list('id', flat=True)),
+        }
+        serializer = StudentDailyMenuSerializer(days, many=True, context=context)
+        return Response(serializer.data, status=status.HTTP_200_OK)

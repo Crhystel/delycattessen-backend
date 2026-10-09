@@ -93,6 +93,8 @@ class MonthlyMenuTests(APITestCase):
         self.ingredient_unreviewed, _ = Ingredient.objects.get_or_create(
             name="Leche entera especial", defaults={"allergens_reviewed": False}
         )
+        self.ingredient_unreviewed.allergens_reviewed = False
+        self.ingredient_unreviewed.save(update_fields=['allergens_reviewed'])
 
     def _auth(self, user):
         token = RefreshToken.for_user(user)
@@ -299,10 +301,8 @@ class MonthlyMenuTests(APITestCase):
             total_amount=Decimal("2.50"),
             status=PreOrder.Status.PENDING,
         )
-        menu_item = MenuItem.objects.create(name="Item Auxiliar", price=Decimal("2.50"))
         PreOrderItem.objects.create(
             pre_order=preorder,
-            menu_item=menu_item,
             dish=dish,
             quantity=1,
             price_at_purchase=Decimal("2.50"),
