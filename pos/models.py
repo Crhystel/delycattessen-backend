@@ -10,6 +10,13 @@ class PreOrder(models.Model):
         CANCELED = 'CANCELED', _('Canceled')
 
     student = models.ForeignKey(StudentProfile, on_delete=models.CASCADE, related_name='pre_orders')
+    daily_menu = models.ForeignKey(
+        'catalog.DailyMenu',
+        on_delete=models.PROTECT,
+        related_name='pre_orders',
+        null=True,
+        blank=True,
+    )
     total_amount = models.DecimalField(_('total amount'), max_digits=8, decimal_places=2)
     status = models.CharField(_('status'), max_length=20, choices=Status.choices, default=Status.PENDING)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -24,6 +31,13 @@ class PreOrder(models.Model):
 class PreOrderItem(models.Model):
     pre_order = models.ForeignKey(PreOrder, on_delete=models.CASCADE, related_name='items')
     menu_item = models.ForeignKey(MenuItem, on_delete=models.PROTECT)
+    dish = models.ForeignKey(
+        'catalog.MenuDish',
+        on_delete=models.PROTECT,
+        related_name='pre_order_items',
+        null=True,
+        blank=True,
+    )
     quantity = models.PositiveIntegerField(default=1)
     price_at_purchase = models.DecimalField(_('price at purchase'), max_digits=6, decimal_places=2)
 
