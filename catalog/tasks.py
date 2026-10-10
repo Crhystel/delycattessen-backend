@@ -1,6 +1,8 @@
 import logging
 from django.conf import settings
-from django.core.mail import get_connection, EmailMessage
+from django.core.mail import get_connection, EmailMultiAlternatives
+from django.template.loader import render_to_string
+from django.utils.html import strip_tags
 from celery import shared_task
 from .models import MonthlyMenu
 
@@ -25,8 +27,9 @@ MONTHS_ES = {
 @shared_task(bind=True, max_retries=3, default_retry_delay=10)
 def send_monthly_menu_published_email(self, monthly_menu_id: int) -> None:
     """
-    Sends an individual plain text email notification to every parent
-    who has active children in the published monthly menu's institution.
+    Sends an individual HTML + plain text email notification using the
+    monthly_menu_published.html template to every parent who has active
+    children in the published monthly menu's institution.
     Reuses a single SMTP connection for efficiency.
     """
     from users.models import CustomUser
@@ -54,30 +57,36 @@ def send_monthly_menu_published_email(self, monthly_menu_id: int) -> None:
         return
 
     month_name = MONTHS_ES.get(menu.month, str(menu.month))
-    subject = "Nuevo menú mensual publicado - D'Elycattessen"
+    subject = "Nuevo menú mensual disponible en Snack-Up"
+    from_email = (
+        settings.DEFAULT_FROM_EMAIL
+        if hasattr(settings, 'DEFAULT_FROM_EMAIL') and settings.DEFAULT_FROM_EMAIL
+        else settings.EMAIL_HOST_USER
+    )
 
     try:
         connection = get_connection()
         messages = []
         for parent in parents:
             parent_name = f"{parent.first_name} {parent.last_name}".strip() or parent.username
-            body = (
-                f"Estimado/a {parent_name},\n\n"
-                f"Le informamos que ya se encuentra publicado el menú mensual correspondiente a "
-                f"{month_name} {menu.year} para la institución {menu.institution.name}.\n\n"
-                f"Ya puede ingresar a la aplicación móvil D'Elycattessen para revisar las opciones disponibles "
-                f"y realizar las preórdenes de alimentación para sus hijos.\n\n"
-                f"Atentamente,\n"
-                f"Equipo D'Elycattessen"
-            )
-            message = EmailMessage(
+            context = {
+                'parent_name': parent_name,
+                'month_name': month_name,
+                'year': menu.year,
+                'institution_name': menu.institution.name,
+            }
+            html_content = render_to_string('emails/monthly_menu_published.html', context)
+            text_content = strip_tags(html_content)
+
+            email_message = EmailMultiAlternatives(
                 subject=subject,
-                body=body,
-                from_email=settings.DEFAULT_FROM_EMAIL if hasattr(settings, 'DEFAULT_FROM_EMAIL') and settings.DEFAULT_FROM_EMAIL else settings.EMAIL_HOST_USER,
+                body=text_content,
+                from_email=from_email,
                 to=[parent.email],
                 connection=connection,
             )
-            messages.append(message)
+            email_message.attach_alternative(html_content, 'text/html')
+            messages.append(email_message)
 
         if messages:
             connection.send_messages(messages)
