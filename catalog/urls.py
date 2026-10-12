@@ -9,6 +9,14 @@ from .views import (
     IngredientCreateView,
     IngredientDetailView,
     AllergenListView,
+    MenuDishListCreateView,
+    MenuDishDetailView,
+    MonthlyMenuListCreateView,
+    MonthlyMenuDetailView,
+    DailyMenuUpdateView,
+    MonthlyMenuPublishView,
+    MonthlyMenuUnpublishView,
+    StudentMonthlyMenuView,
 )
 
 urlpatterns = [
@@ -21,4 +29,13 @@ urlpatterns = [
     path('ingredients/<int:pk>/', IngredientDetailView.as_view(), name='ingredient_detail'),
     path('allergens/', AllergenListView.as_view(), name='allergen_list'),
     path('allergens/create/', AllergenCreateView.as_view(), name='allergen_create'),
+    # Monthly Menu & Dishes
+    path('dishes/', MenuDishListCreateView.as_view(), name='dish_list_create'),
+    path('dishes/<int:pk>/', MenuDishDetailView.as_view(), name='dish_detail'),
+    path('monthly_menus/', MonthlyMenuListCreateView.as_view(), name='monthly_menu_list_create'),
+    path('monthly_menus/<int:pk>/', MonthlyMenuDetailView.as_view(), name='monthly_menu_detail'),
+    path('monthly_menus/<int:pk>/days/<str:date>/', DailyMenuUpdateView.as_view(), name='monthly_menu_day_update'),
+    path('monthly_menus/<int:pk>/publish/', MonthlyMenuPublishView.as_view(), name='monthly_menu_publish'),
+    path('monthly_menus/<int:pk>/unpublish/', MonthlyMenuUnpublishView.as_view(), name='monthly_menu_unpublish'),
+    path('students/<int:student_id>/monthly_menu/', StudentMonthlyMenuView.as_view(), name='student_monthly_menu'),
 ]

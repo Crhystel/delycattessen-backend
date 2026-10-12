@@ -60,4 +60,27 @@ class UppercaseNamesMixin:
             if field in attrs and attrs[field]:
                 attrs[field] = attrs[field].upper()
         return attrs
-        
+
+
+class OwnInstitutionMixin:
+    """
+    Mixin Pattern (over DRF's get_queryset): enforces multi-tenant scoping
+    strictly to the authenticated user's institution (request.user.institution).
+    Ignores any ?institution= query param.
+    Raises PermissionDenied if the user does not have an institution assigned.
+    Provides get_user_institution() helper for perform_create.
+    """
+    institution_lookup = 'institution'
+
+    def get_user_institution(self):
+        from rest_framework.exceptions import PermissionDenied
+        user = self.request.user
+        institution = getattr(user, 'institution', None)
+        if not institution:
+            raise PermissionDenied('No tiene una institución asignada para realizar esta acción.')
+        return institution
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        institution = self.get_user_institution()
+        return queryset.filter(**{self.institution_lookup: institution})
