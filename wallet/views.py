@@ -1,3 +1,7 @@
+import json
+from urllib.parse import urlparse
+
+import requests
 from django.conf import settings
 from django.http import HttpResponse
 from rest_framework import status
@@ -13,6 +17,16 @@ from .services import GatewayError, PayphonePreparer
 from .tasks import process_recharge_task, send_recharge_confirmation_email
 
 
+def _is_allowed_redirect_target(url: str) -> bool:
+    """Only https URLs on the Payphone host (or explicitly allowed hosts)."""
+    parsed = urlparse(url)
+    allowed_hosts = {
+        urlparse(settings.PAYPHONE_API_URL).hostname,
+        *settings.PAYPHONE_ALLOWED_REDIRECT_HOSTS,
+    }
+    return parsed.scheme == 'https' and bool(parsed.hostname) and parsed.hostname in allowed_hosts
+
+
 class PayphoneRedirectView(APIView):
     """Intermediate page served from OUR OWN domain (the one registered in
     Payphone Developer). Flutter's WebView opens this URL first, not
@@ -25,7 +39,12 @@ class PayphoneRedirectView(APIView):
         target_url = request.query_params.get('target')
         if not target_url:
             return HttpResponse('Missing target parameter.', status=400)
+        if not _is_allowed_redirect_target(target_url):
+            return HttpResponse('Invalid target parameter.', status=400)
 
+        # json.dumps yields a valid JS string literal; '<' is escaped so the
+        # value can never close the <script> tag.
+        js_target = json.dumps(target_url).replace('<', '\\u003c')
         html = f"""
         <!DOCTYPE html>
         <html>
@@ -34,7 +53,7 @@ class PayphoneRedirectView(APIView):
           <meta name="referrer" content="strict-origin-when-cross-origin">
         </head>
         <body>
-          <script>window.location.replace({target_url!r});</script>
+          <script>window.location.replace({js_target});</script>
         </body>
         </html>
         """
@@ -98,8 +117,15 @@ class PayphoneCallbackView(APIView):
 
         if not payphone_id or not client_transaction_id:
             return Response({'detail': 'Missing id or clientTransactionId.'}, status=400)
+        if not (payphone_id.isdigit() and client_transaction_id.isdigit()):
+            return Response({'detail': 'Invalid id or clientTransactionId.'}, status=400)
 
-        transaction = PayphonePreparer().confirm(int(payphone_id), client_transaction_id)
+        try:
+            transaction = PayphonePreparer().confirm(int(payphone_id), client_transaction_id)
+        except Transaction.DoesNotExist:
+            return Response({'detail': 'Transaction not found.'}, status=404)
+        except requests.RequestException:
+            return Response({'detail': 'Payphone no respondió correctamente.'}, status=502)
         return Response({'status': transaction.status})
 
 
@@ -113,7 +139,7 @@ class WalletTransactionListView(APIView):
         self.check_object_permissions(request, wallet)
 
         transactions = wallet.transactions.select_related('pre_order').prefetch_related(
-            'pre_order__items__menu_item'
+            'pre_order__items__dish', 'pre_order__items__menu_item'
         )[:10]
         serializer = TransactionSerializer(transactions, many=True)
         return Response(serializer.data)

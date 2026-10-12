@@ -179,3 +179,8 @@ PAYPHONE_STORE_ID = config('PAYPHONE_STORE_ID', default='')
 PAYPHONE_API_URL = config('PAYPHONE_API_URL', default='https://pay.payphonetodoesposible.com/api')
 PAYPHONE_RESPONSE_URL = config('PAYPHONE_RESPONSE_URL', default='')
 PAYPHONE_REDIRECT_BASE_URL = config('PAYPHONE_REDIRECT_BASE_URL', default='')
+PAYPHONE_ALLOWED_REDIRECT_HOSTS = [
+    host.strip()
+    for host in config('PAYPHONE_ALLOWED_REDIRECT_HOSTS', default='').split(',')
+    if host.strip()
+]
