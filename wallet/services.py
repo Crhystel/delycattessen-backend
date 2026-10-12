@@ -4,6 +4,7 @@ from decimal import Decimal
 
 import requests
 from django.conf import settings
+from django.db import transaction as db_transaction
 
 from .models import Transaction, Wallet
 
@@ -194,28 +195,37 @@ class PayphonePreparer:
         }
 
     def confirm(self, payphone_id: int, client_transaction_id: str) -> Transaction:
-        transaction = Transaction.objects.select_related('wallet').get(pk=client_transaction_id)
+        with db_transaction.atomic():
+            # Row lock: concurrent callbacks for the same transaction run one at a time.
+            transaction = (
+                Transaction.objects.select_for_update()
+                .select_related('wallet')
+                .get(pk=client_transaction_id)
+            )
+            if transaction.status == Transaction.Status.SUCCESS:
+                # Already credited: a retried callback must not credit the wallet twice.
+                return transaction
 
-        response = requests.post(
-            f'{settings.PAYPHONE_API_URL}/button/V2/Confirm',
-            json={'id': payphone_id, 'clientTxId': client_transaction_id},
-            headers={
-                'Authorization': f'Bearer {settings.PAYPHONE_TOKEN}',
-                'Content-Type': 'application/json',
-            },
-            timeout=10,
-        )
-        response.raise_for_status()
-        data = response.json()
+            response = requests.post(
+                f'{settings.PAYPHONE_API_URL}/button/V2/Confirm',
+                json={'id': payphone_id, 'clientTxId': client_transaction_id},
+                headers={
+                    'Authorization': f'Bearer {settings.PAYPHONE_TOKEN}',
+                    'Content-Type': 'application/json',
+                },
+                timeout=10,
+            )
+            response.raise_for_status()
+            data = response.json()
 
-        if data.get('transactionStatus') == 'Approved':
-            transaction.status = Transaction.Status.SUCCESS
-            transaction.wallet.balance += transaction.amount
-            transaction.wallet.save(update_fields=['balance'])
+            if data.get('transactionStatus') == 'Approved':
+                transaction.status = Transaction.Status.SUCCESS
+                transaction.wallet.balance += transaction.amount
+                transaction.wallet.save(update_fields=['balance'])
 
-            from .tasks import send_recharge_confirmation_email
-            send_recharge_confirmation_email.delay(transaction.id)
-        else:
-            transaction.status = Transaction.Status.FAILED
-        transaction.save(update_fields=['status'])
-        return transaction
+                from .tasks import send_recharge_confirmation_email
+                send_recharge_confirmation_email.delay(transaction.id)
+            else:
+                transaction.status = Transaction.Status.FAILED
+            transaction.save(update_fields=['status'])
+            return transaction
