@@ -254,7 +254,7 @@ class MonthlyMenuTests(APITestCase):
         self.assertNotIn(self.parent_user_b.email, [m.to[0] for m in mail.outbox])
         self.assertNotIn(self.teacher_a.email, [m.to[0] for m in mail.outbox])
 
-        self.assertIn("Nuevo menú mensual publicado - D'Elycattessen", sent_email.subject)
+        self.assertIn("Nuevo menú mensual disponible en Snack-Up", sent_email.subject)
         self.assertIn("Noviembre 2026", sent_email.body)
         self.assertIn(self.institution_a.name, sent_email.body)
 
