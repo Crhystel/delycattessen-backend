@@ -108,10 +108,9 @@ def test_confirm_already_successful_does_not_credit_twice_nor_call_payphone(
     wallet, pending_transaction, payphone_post, mock_celery_delay,
 ):
     payphone_post.return_value = make_response(200, {'transactionStatus': 'Approved'})
-    preparer = PayphonePreparer()
 
-    preparer.confirm(987, str(pending_transaction.id))
-    preparer.confirm(987, str(pending_transaction.id))  # duplicated callback
+    PayphonePreparer().confirm(987, str(pending_transaction.id))
+    PayphonePreparer().confirm(987, str(pending_transaction.id))
 
     wallet.refresh_from_db()
     assert wallet.balance == Decimal('13.00')

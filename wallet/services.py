@@ -156,23 +156,29 @@ class PayphonePreparer:
             status=Transaction.Status.PENDING,
             type=Transaction.Type.RECHARGE,
         )
-        response = requests.post(
-            f'{settings.PAYPHONE_API_URL}/button/Prepare',
-            json={
-                'amount': int(amount * 100),
-                'amountWithoutTax': int(amount * 100),
-                'clientTransactionId': str(transaction.id),
-                'currency': 'USD',
-                'storeId': settings.PAYPHONE_STORE_ID,
-                'reference': f'Recarga billetera #{wallet.id}',
-                'responseUrl': settings.PAYPHONE_RESPONSE_URL,
-            },
-            headers={
-                'Authorization': f'Bearer {settings.PAYPHONE_TOKEN}',
-                'Content-Type': 'application/json',
-            },
-            timeout=10,
-        )
+        try:
+            response = requests.post(
+                f'{settings.PAYPHONE_API_URL}/button/Prepare',
+                json={
+                    'amount': int(amount * 100),
+                    'amountWithoutTax': int(amount * 100),
+                    'clientTransactionId': str(transaction.id),
+                    'currency': 'USD',
+                    'storeId': settings.PAYPHONE_STORE_ID,
+                    'reference': f'Recarga billetera #{wallet.id}',
+                    'responseUrl': settings.PAYPHONE_RESPONSE_URL,
+                },
+                headers={
+                    'Authorization': f'Bearer {settings.PAYPHONE_TOKEN}',
+                    'Content-Type': 'application/json',
+                },
+                timeout=10,
+            )
+        except requests.RequestException as exc:
+            # Gateway unreachable: do not leave an orphan PENDING transaction.
+            transaction.status = Transaction.Status.FAILED
+            transaction.save(update_fields=['status'])
+            raise GatewayError('Payphone no está disponible.') from exc
 
         if response.status_code != 200:
             error_data = response.json() if response.content else {}
