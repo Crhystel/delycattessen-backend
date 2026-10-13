@@ -57,6 +57,9 @@ class MenuItem(models.Model):
 
     def save(self, *args, **kwargs):
         self.is_visible = self.stock > 0
+        if self.image:
+            from delycattessen_backend.image_utils import resize_image_field
+            resize_image_field(self.image)
         super().save(*args, **kwargs)
 
     def __str__(self):
@@ -97,6 +100,12 @@ class MenuDish(models.Model):
     class Meta:
         verbose_name = _('menu dish')
         verbose_name_plural = _('menu dishes')
+
+    def save(self, *args, **kwargs):
+        if self.image:
+            from delycattessen_backend.image_utils import resize_image_field
+            resize_image_field(self.image)
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.name} ({self.institution.name})"

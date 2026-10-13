@@ -334,3 +334,94 @@ class MonthlyMenuTests(APITestCase):
         res_del_dish = self.client.delete(f'/api/catalog/dishes/{dish.id}/')
         self.assertEqual(res_del_dish.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn('Este platillo tiene preórdenes pendientes y no se puede modificar.', str(res_del_dish.data))
+
+
+class MonthlyMenuEmailTaskTests(APITestCase):
+    def test_send_monthly_menu_email_batches_and_retries_on_error(self):
+        """Verifies that send_monthly_menu_published_email sends in batches and retries on failure."""
+        from catalog.tasks import send_monthly_menu_published_email
+        from celery.exceptions import Retry
+
+        institution = Institution.objects.create(name="Colegio Email Test")
+        menu = MonthlyMenu.objects.create(
+            institution=institution,
+            month=11,
+            year=2026,
+            status=MonthlyMenu.Status.PUBLISHED,
+        )
+
+        # Create 55 parents to verify batching (>50)
+        parent_users = []
+        for i in range(55):
+            p_user = CustomUser.objects.create_user(
+                username=f"parent_batch_{i}",
+                email=f"parent_batch_{i}@test.com",
+                password="password123",
+                role=CustomUser.Role.PARENT,
+            )
+            p_prof = ParentProfile.objects.create(user=p_user)
+            s_user = CustomUser.objects.create_user(
+                username=f"student_batch_{i}",
+                email=f"student_batch_{i}@test.com",
+                password="password123",
+                role=CustomUser.Role.STUDENT,
+            )
+            StudentProfile.objects.create(user=s_user, institution=institution, parent=p_prof)
+            parent_users.append(p_user)
+
+        # 1. Success test: send_messages is called twice (50 in first batch, 5 in second batch)
+        mock_conn = mock.MagicMock()
+        with mock.patch('catalog.tasks.get_connection', return_value=mock_conn):
+            send_monthly_menu_published_email(menu.id)
+            mock_conn.open.assert_called_once()
+            self.assertEqual(mock_conn.send_messages.call_count, 2)
+            first_batch = mock_conn.send_messages.call_args_list[0][0][0]
+            second_batch = mock_conn.send_messages.call_args_list[1][0][0]
+            self.assertEqual(len(first_batch), 50)
+            self.assertEqual(len(second_batch), 5)
+
+        # 2. Failure test: verifies self.retry is invoked with exc
+        mock_failing_conn = mock.MagicMock()
+        mock_failing_conn.send_messages.side_effect = Exception("SMTP Connection Failed")
+        with mock.patch('catalog.tasks.get_connection', return_value=mock_failing_conn), \
+             mock.patch.object(send_monthly_menu_published_email, 'retry', side_effect=Retry) as mock_retry:
+            with self.assertRaises(Retry):
+                send_monthly_menu_published_email(menu.id)
+            mock_retry.assert_called_once()
+
+
+class ImageResizingTests(APITestCase):
+    def test_large_image_is_resized_to_max_1024_jpeg(self):
+        """Verifies that uploaded images > 1024px are resized to max 1024px JPEG quality 85."""
+        import io
+        from PIL import Image
+
+        # Create large 2000x1500 RGB image
+        img = Image.new('RGB', (2000, 1500), color='blue')
+        img_io = io.BytesIO()
+        img.save(img_io, format='PNG')
+        img_io.seek(0)
+
+        uploaded = SimpleUploadedFile(
+            name='large_dish.png',
+            content=img_io.read(),
+            content_type='image/png',
+        )
+
+        institution = Institution.objects.create(name="Colegio Image Test")
+        dish = MenuDish.objects.create(
+            name="Platillo Gigante",
+            description="Foto gigante",
+            price=Decimal("4.00"),
+            institution=institution,
+            image=uploaded,
+        )
+
+        # Reload and check image dimensions
+        dish.refresh_from_db()
+        self.assertTrue(dish.image)
+        with Image.open(dish.image.path) as saved_img:
+            w, h = saved_img.size
+            self.assertLessEqual(max(w, h), 1024)
+            self.assertEqual(saved_img.format, 'JPEG')
+

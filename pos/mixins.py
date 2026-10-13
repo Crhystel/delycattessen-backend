@@ -77,10 +77,9 @@ class ParentalControlValidatorMixin:
 
 import os
 import io
-import gc
 import hashlib
 import logging
-import urllib.request
+import threading
 from typing import TYPE_CHECKING
 from django.conf import settings
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -94,21 +93,42 @@ logger = logging.getLogger(__name__)
 YUNET_URL = 'https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx'
 SFACE_URL = 'https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx'
 
+_BIOMETRIC_LOCK = threading.Lock()
+_FACE_DETECTOR = None
+_FACE_RECOGNIZER = None
+
+
 def _get_biometric_model_paths():
     models_dir = os.path.join(settings.BASE_DIR, 'models')
-    os.makedirs(models_dir, exist_ok=True)
     yunet_path = os.path.join(models_dir, 'face_detection_yunet_2023mar.onnx')
     sface_path = os.path.join(models_dir, 'face_recognition_sface_2021dec.onnx')
 
-    if not os.path.exists(yunet_path):
-        logger.info("Downloading YuNet face detection model...")
-        urllib.request.urlretrieve(YUNET_URL, yunet_path)
-
-    if not os.path.exists(sface_path):
-        logger.info("Downloading SFace facial recognition model...")
-        urllib.request.urlretrieve(SFACE_URL, sface_path)
+    if not os.path.exists(yunet_path) or not os.path.exists(sface_path):
+        raise FileNotFoundError(
+            "Modelos biométricos no encontrados. Ejecuta 'python manage.py download_biometric_models' para descargarlos."
+        )
 
     return yunet_path, sface_path
+
+
+def _get_biometric_models():
+    """
+    Returns (detector, recognizer), lazily initialized once per process under a thread lock.
+    """
+    global _FACE_DETECTOR, _FACE_RECOGNIZER
+    if _FACE_DETECTOR is None or _FACE_RECOGNIZER is None:
+        import cv2
+        yunet_path, sface_path = _get_biometric_model_paths()
+        _FACE_DETECTOR = cv2.FaceDetectorYN.create(
+            model=yunet_path,
+            config='',
+            input_size=(320, 320),
+            score_threshold=0.5,
+            nms_threshold=0.3,
+            top_k=5000,
+        )
+        _FACE_RECOGNIZER = cv2.FaceRecognizerSF.create(model=sface_path, config='')
+    return _FACE_DETECTOR, _FACE_RECOGNIZER
 
 
 class BiometricValidationMixin:
@@ -116,7 +136,7 @@ class BiometricValidationMixin:
     Encapsulates all mathematical facial comparison and AES-256-GCM encryption/decryption.
     Guarantees strict compliance with Data Protection Laws:
     - Detects and crops only the facial bounding box, eliminating background room bias.
-    - Destroys raw image frames in volatile memory immediately after embedding extraction.
+    - Destroys raw image frames in volatile memory immediately after embedding extraction (LOPDP).
     - Encrypts deep 128-dimensional mathematical vectors with AES-256-GCM.
     - Performs similarity matching in memory without persisting pictures.
     """
@@ -153,9 +173,8 @@ class BiometricValidationMixin:
         """
         Detects the face with YuNet, aligns it using 5 facial landmarks,
         and extracts a 128-dimensional Deep SFace feature vector.
-        Immediately obliterates the raw image buffer from memory.
+        La imagen se descarta de memoria al soltar las referencias (requisito LOPDP).
         """
-        # Lazy imports: keep cv2/numpy out of the web process until a face request arrives.
         import cv2
         import numpy as np
         try:
@@ -173,30 +192,22 @@ class BiometricValidationMixin:
                 raise ValidationError("Formato de imagen no soportado o archivo corrupto.")
 
             h, w = img.shape[:2]
-            yunet_path, sface_path = _get_biometric_model_paths()
 
-            detector = cv2.FaceDetectorYN.create(
-                model=yunet_path,
-                config='',
-                input_size=(w, h),
-                score_threshold=0.5,
-                nms_threshold=0.3,
-                top_k=5000
-            )
-            _, faces = detector.detect(img)
+            with _BIOMETRIC_LOCK:
+                detector, recognizer = _get_biometric_models()
+                detector.setInputSize((w, h))
+                _, faces = detector.detect(img)
 
-            if faces is None or len(faces) == 0:
-                raise ValidationError(
-                    "No se detectó un rostro claro en la imagen. "
-                    "Por favor, asegúrate de colocar el rostro dentro del encuadre con buena iluminación."
-                )
+                if faces is None or len(faces) == 0:
+                    raise ValidationError(
+                        "No se detectó un rostro claro en la imagen. "
+                        "Por favor, asegúrate de colocar el rostro dentro del encuadre con buena iluminación."
+                    )
 
-            # Pick largest face (the primary subject in the frame)
-            best_face = max(faces, key=lambda f: f[2] * f[3])
-
-            recognizer = cv2.FaceRecognizerSF.create(model=sface_path, config='')
-            aligned_face = recognizer.alignCrop(img, best_face)
-            embedding = recognizer.feature(aligned_face).flatten()
+                # Pick largest face (the primary subject in the frame)
+                best_face = max(faces, key=lambda f: f[2] * f[3])
+                aligned_face = recognizer.alignCrop(img, best_face)
+                embedding = recognizer.feature(aligned_face).flatten()
 
             # L2 Normalize
             norm = np.linalg.norm(embedding)
@@ -207,7 +218,12 @@ class BiometricValidationMixin:
         finally:
             if 'raw_bytes' in locals():
                 del raw_bytes
-            gc.collect()
+            if 'nparr' in locals():
+                del nparr
+            if 'img' in locals():
+                del img
+            if 'aligned_face' in locals():
+                del aligned_face
 
     def calculate_similarity(self, vector_a: np.ndarray, vector_b: np.ndarray) -> float:
         """Calculates cosine similarity between two 128-d deep face embeddings."""
@@ -218,30 +234,68 @@ class BiometricValidationMixin:
             return 0.0
         return float(np.dot(vector_a.flatten(), vector_b.flatten()) / (norm_a * norm_b))
 
-    def match_face(self, candidate_embedding: np.ndarray, threshold: float = 0.40):
+    def match_face(self, candidate_embedding: np.ndarray, institution=None, threshold: float = 0.40):
         """
-        Matches a candidate embedding against all active registered biometric embeddings in memory.
-        The official SFace threshold is cosine >= 0.363. Setting threshold = 0.40 guarantees high accuracy
-        and zero false positives from different people.
-        Returns (matched_user, similarity_score) or (None, highest_score).
+        Matches a candidate embedding against active registered biometric embeddings in memory.
+        If institution is provided, filters strictly for students of that institution
+        (user__student_profile__institution) and teachers (user__institution) (RNF-04).
+        Performs vectorized cosine comparison with NumPy.
+        Returns (matched_user, similarity_score) or (None, -1.0).
         """
+        import numpy as np
+        from django.db.models import Q
         from users.models import UserBiometric
-        biometrics = UserBiometric.objects.filter(is_active=True).select_related('user')
-        best_user = None
-        best_score = -1.0
 
+        qs = UserBiometric.objects.filter(is_active=True)
+        if institution is not None:
+            qs = qs.filter(
+                Q(user__student_profile__institution=institution) | Q(user__institution=institution)
+            )
+
+        biometrics = list(
+            qs.select_related('user').only(
+                'id',
+                'user_id',
+                'encrypted_embedding',
+                'nonce',
+                'tag',
+                'user__id',
+                'user__username',
+                'user__first_name',
+                'user__last_name',
+                'user__role',
+            )
+        )
+
+        stored_vectors = []
+        valid_users = []
         for bio in biometrics:
             try:
                 stored_vector = self.decrypt_embedding(bio.encrypted_embedding, bio.nonce, bio.tag)
-                similarity = self.calculate_similarity(candidate_embedding, stored_vector)
-                logger.info(f"[BIOMETRIC] Candidate compared with user {bio.user.username}: similarity={similarity:.4f}")
-                if similarity > best_score:
-                    best_score = similarity
-                    if similarity >= threshold:
-                        best_user = bio.user
+                stored_vectors.append(stored_vector)
+                valid_users.append(bio.user)
             except Exception as e:
-                logger.warning(f"[BIOMETRIC] Decrypt error for user {bio.user_id}: {e}")
+                logger.warning("[BIOMETRIC] Decrypt error for user %s: %s", bio.user_id, e)
                 continue
 
+        best_user = None
+        best_score = -1.0
+
+        if stored_vectors:
+            matrix = np.array(stored_vectors, dtype=np.float32)  # shape (N, 128)
+            cand = candidate_embedding.flatten().astype(np.float32)
+            cand_norm = np.linalg.norm(cand)
+            matrix_norms = np.linalg.norm(matrix, axis=1)
+            denom = matrix_norms * cand_norm
+            denom = np.where(denom == 0, 1e-9, denom)
+            similarities = np.dot(matrix, cand) / denom
+
+            best_idx = int(np.argmax(similarities))
+            score = float(similarities[best_idx])
+            best_score = score
+            if score >= threshold:
+                best_user = valid_users[best_idx]
+
+        logger.debug("[BIOMETRIC] Face match evaluation completed: match_found=%s", best_user is not None)
         return best_user, best_score
 

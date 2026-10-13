@@ -23,3 +23,12 @@ def mock_celery_delay():
     with mock.patch('wallet.tasks.send_recharge_confirmation_email.delay') as email_delay, \
          mock.patch('wallet.tasks.process_recharge_task.delay') as recharge_delay:
         yield SimpleNamespace(email=email_delay, recharge=recharge_delay)
+
+
+@pytest.fixture(autouse=True)
+def temp_media_root(settings, tmp_path):
+    """Isolates MEDIA_ROOT per test into a temporary directory so media/ is untouched."""
+    media_dir = tmp_path / 'media'
+    media_dir.mkdir(parents=True, exist_ok=True)
+    settings.MEDIA_ROOT = str(media_dir)
+    return settings.MEDIA_ROOT

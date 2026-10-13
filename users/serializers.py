@@ -1,6 +1,9 @@
+import logging
 import secrets
 import string
 from rest_framework import serializers
+
+logger = logging.getLogger(__name__)
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
 from django.db import transaction
@@ -237,34 +240,46 @@ class StudentRegistrationSerializer(UppercaseNamesMixin,serializers.Serializer):
         student_user.set_password(validated_data['password'])
         student_user.save()
 
+        # Automatic biometric facial vector registration from ORIGINAL profile picture
+        biometric_registered = False
+        vector = None
+        photo = validated_data['profile_picture']
+        try:
+            from pos.mixins import BiometricValidationMixin
+            mixin = BiometricValidationMixin()
+            photo.seek(0)
+            vector = mixin.extract_face_embedding(photo)
+        except Exception as e:
+            logger.warning("[BIOMETRIC] Error al extraer embedding facial en registro: %s", str(e))
+
+        photo.seek(0)
         student_profile = StudentProfile.objects.create(
             user=student_user,
             institution=institution,
-            profile_picture=validated_data['profile_picture'],
+            profile_picture=photo,
             parent=parent_profile,
         )
 
-        # Automatic biometric facial vector registration from profile picture
-        try:
-            from pos.mixins import BiometricValidationMixin
-            from users.models import UserBiometric
-            mixin = BiometricValidationMixin()
-            photo = validated_data['profile_picture']
-            photo.seek(0)
-            vector = mixin.extract_face_embedding(photo)
-            ciphertext, nonce, tag = mixin.encrypt_embedding(vector)
-            UserBiometric.objects.update_or_create(
-                user=student_user,
-                defaults={
-                    'encrypted_embedding': ciphertext,
-                    'nonce': nonce,
-                    'tag': tag,
-                    'is_active': True,
-                }
-            )
-        except Exception as e:
-            # Fallback gracefully if biometric extraction encounters non-standard format
-            pass
+        if vector is not None:
+            try:
+                from pos.mixins import BiometricValidationMixin
+                from users.models import UserBiometric
+                mixin = BiometricValidationMixin()
+                ciphertext, nonce, tag = mixin.encrypt_embedding(vector)
+                UserBiometric.objects.update_or_create(
+                    user=student_user,
+                    defaults={
+                        'encrypted_embedding': ciphertext,
+                        'nonce': nonce,
+                        'tag': tag,
+                        'is_active': True,
+                    }
+                )
+                biometric_registered = True
+            except Exception as e:
+                logger.warning("[BIOMETRIC] Error al guardar biometría en registro: %s", str(e))
+
+        student_profile.biometric_registered = biometric_registered
 
         from wallet.models import Wallet
         Wallet.objects.create(student=student_profile, low_balance_threshold=5.00)

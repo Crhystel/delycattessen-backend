@@ -525,3 +525,95 @@ class LazyBiometricImportsTests(TestCase):
             [sys.executable, '-c', code], cwd=settings.BASE_DIR, capture_output=True, text=True
         )
         self.assertEqual(result.returncode, 0, msg=result.stderr[-500:])
+
+
+class BiometricModelReuseAndFilteringTests(TestCase, BiometricValidationMixin):
+    def test_biometric_models_created_once_on_multiple_calls(self):
+        """Verifies that FaceDetectorYN and FaceRecognizerSF are created only once."""
+        from unittest.mock import patch, MagicMock
+        import pos.mixins as mixins_module
+
+        # Reset module globals to ensure a clean test
+        with mixins_module._BIOMETRIC_LOCK:
+            orig_detector = mixins_module._FACE_DETECTOR
+            orig_recognizer = mixins_module._FACE_RECOGNIZER
+            mixins_module._FACE_DETECTOR = None
+            mixins_module._FACE_RECOGNIZER = None
+
+        try:
+            mock_detector = MagicMock()
+            # Return one detected face: [x, y, w, h, ...]
+            mock_detector.detect.return_value = (1, np.array([[10, 10, 50, 50]], dtype=np.float32))
+            mock_recognizer = MagicMock()
+            mock_recognizer.alignCrop.return_value = np.zeros((112, 112, 3), dtype=np.uint8)
+            mock_recognizer.feature.return_value = np.ones((1, 128), dtype=np.float32)
+
+            with patch('cv2.FaceDetectorYN.create', return_value=mock_detector) as mock_create_det, \
+                 patch('cv2.FaceRecognizerSF.create', return_value=mock_recognizer) as mock_create_rec:
+
+                # Dummy 100x100 RGB image encoded as JPEG
+                import cv2
+                _, img_encoded = cv2.imencode('.jpg', np.zeros((100, 100, 3), dtype=np.uint8))
+                img_bytes = img_encoded.tobytes()
+
+                # Call extract_face_embedding twice
+                emb1 = self.extract_face_embedding(img_bytes)
+                emb2 = self.extract_face_embedding(img_bytes)
+
+                self.assertEqual(mock_create_det.call_count, 1)
+                self.assertEqual(mock_create_rec.call_count, 1)
+                self.assertEqual(len(emb1), 128)
+                self.assertEqual(len(emb2), 128)
+        finally:
+            with mixins_module._BIOMETRIC_LOCK:
+                mixins_module._FACE_DETECTOR = orig_detector
+                mixins_module._FACE_RECOGNIZER = orig_recognizer
+
+    def test_match_face_filters_by_institution(self):
+        """match_face must not return a matched user from another institution."""
+        inst_a = Institution.objects.create(name="Colegio A")
+        inst_b = Institution.objects.create(name="Colegio B")
+
+        user_a = CustomUser.objects.create_user(
+            username="student_a", email="student_a@test.com", password="password123",
+            role=CustomUser.Role.STUDENT, institution=inst_a
+        )
+        user_b = CustomUser.objects.create_user(
+            username="student_b", email="student_b@test.com", password="password123",
+            role=CustomUser.Role.STUDENT, institution=inst_b
+        )
+
+        from users.models import StudentProfile, ParentProfile
+        parent_user = CustomUser.objects.create_user(
+            username="parent_ab", email="parent_ab@test.com", password="password123",
+            role=CustomUser.Role.PARENT
+        )
+        parent_profile = ParentProfile.objects.create(user=parent_user)
+
+        StudentProfile.objects.create(user=user_a, institution=inst_a, parent=parent_profile)
+        StudentProfile.objects.create(user=user_b, institution=inst_b, parent=parent_profile)
+
+        # Vector of 128 dimensions normalized
+        vector = np.ones(128, dtype=np.float32)
+        vector /= np.linalg.norm(vector)
+
+        ciphertext_b, nonce_b, tag_b = self.encrypt_embedding(vector)
+        UserBiometric.objects.create(
+            user=user_b,
+            encrypted_embedding=ciphertext_b,
+            nonce=nonce_b,
+            tag=tag_b,
+            is_active=True
+        )
+
+        # Searching with operator of institution A: user_b from institution B must NOT match
+        matched_user, score = self.match_face(vector, institution=inst_a)
+        self.assertIsNone(matched_user)
+        self.assertEqual(score, -1.0)
+
+        # Searching with operator of institution B: user_b MUST match
+        matched_user_b, score_b = self.match_face(vector, institution=inst_b)
+        self.assertIsNotNone(matched_user_b)
+        self.assertEqual(matched_user_b.id, user_b.id)
+        self.assertGreater(score_b, 0.9)
+

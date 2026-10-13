@@ -92,6 +92,12 @@ class StudentProfile(models.Model):
     def __str__(self) -> str:
         return str(_('Perfil de Estudiante: %(username)s')) % {'username': self.user.username}
 
+    def save(self, *args, **kwargs):
+        if self.profile_picture:
+            from delycattessen_backend.image_utils import resize_image_field
+            resize_image_field(self.profile_picture)
+        super().save(*args, **kwargs)
+
     class Meta:
         verbose_name = _('student profile')
         verbose_name_plural = _('student profiles')

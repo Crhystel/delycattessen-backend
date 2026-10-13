@@ -64,10 +64,13 @@ def send_monthly_menu_published_email(self, monthly_menu_id: int) -> None:
         else settings.EMAIL_HOST_USER
     )
 
+    connection = None
     try:
         connection = get_connection()
-        messages = []
-        for parent in parents:
+        connection.open()
+        batch = []
+        total_sent = 0
+        for parent in parents.iterator(chunk_size=50):
             parent_name = f"{parent.first_name} {parent.last_name}".strip() or parent.username
             context = {
                 'parent_name': parent_name,
@@ -86,11 +89,25 @@ def send_monthly_menu_published_email(self, monthly_menu_id: int) -> None:
                 connection=connection,
             )
             email_message.attach_alternative(html_content, 'text/html')
-            messages.append(email_message)
+            batch.append(email_message)
 
-        if messages:
-            connection.send_messages(messages)
-            logger.info(f"Sent {len(messages)} monthly menu notification emails for menu {monthly_menu_id}.")
+            if len(batch) >= 50:
+                connection.send_messages(list(batch))
+                total_sent += len(batch)
+                batch.clear()
+
+        if batch:
+            connection.send_messages(list(batch))
+            total_sent += len(batch)
+            batch.clear()
+
+        logger.info(f"Sent {total_sent} monthly menu notification emails for menu {monthly_menu_id}.")
     except Exception as exc:
         logger.error(f"Error sending monthly menu published emails: {exc}")
         raise self.retry(exc=exc)
+    finally:
+        if connection:
+            try:
+                connection.close()
+            except Exception:
+                pass

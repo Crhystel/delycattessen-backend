@@ -265,6 +265,60 @@ def test_transaction_list_returns_wallet_recharges(parent_client, wallet):
     assert all(item['items'] == [] for item in body)
 
 
+def test_transaction_list_with_preorder_dish(parent_client, wallet):
+    from catalog.models import MenuDish, MonthlyMenu, DailyMenu
+    from pos.models import PreOrder, PreOrderItem
+    import datetime
+
+    # Create dish and preorder
+    dish = MenuDish.objects.create(
+        name="Ensalada Cesar",
+        description="Ensalada fresca",
+        price=Decimal("3.50"),
+        institution=wallet.student.institution,
+    )
+    monthly_menu = MonthlyMenu.objects.create(
+        institution=wallet.student.institution,
+        month=10,
+        year=2026,
+    )
+    daily_menu = DailyMenu.objects.create(
+        monthly_menu=monthly_menu,
+        date=datetime.date(2026, 10, 20),
+    )
+    preorder = PreOrder.objects.create(
+        student=wallet.student,
+        daily_menu=daily_menu,
+        total_amount=Decimal("3.50"),
+        status=PreOrder.Status.PENDING,
+    )
+    PreOrderItem.objects.create(
+        pre_order=preorder,
+        dish=dish,
+        quantity=1,
+        price_at_purchase=Decimal("3.50"),
+    )
+    Transaction.objects.create(
+        wallet=wallet,
+        amount=Decimal("3.50"),
+        type=Transaction.Type.CONSUMPTION,
+        status=Transaction.Status.SUCCESS,
+        pre_order=preorder,
+    )
+
+    response = parent_client.get(transactions_url(wallet.id))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]['display_name'] == 'Ensalada Cesar'
+    assert len(body[0]['items']) == 1
+    assert body[0]['items'][0]['menu_item_name'] == 'Ensalada Cesar'
+    assert body[0]['items'][0]['quantity'] == 1
+    assert body[0]['items'][0]['price_at_purchase'] == '3.50'
+
+
+
 def test_transaction_list_is_limited_to_ten(parent_client, wallet):
     for _ in range(12):
         make_recharge(wallet)

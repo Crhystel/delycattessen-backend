@@ -33,7 +33,7 @@ class TransactionSerializer(serializers.ModelSerializer):
             return 'Recarga de saldo'
         if obj.pre_order_id:
             item_names = [
-                (item.dish.name if item.dish else (item.menu_item.name if item.menu_item else 'Producto'))
+                (item.dish.name if item.dish else 'Producto')
                 for item in obj.pre_order.items.all()
             ]
             if item_names:
@@ -52,7 +52,7 @@ class TransactionSerializer(serializers.ModelSerializer):
             return []
         return [
             {
-                'menu_item_name': (item.dish.name if item.dish else (item.menu_item.name if item.menu_item else 'Producto')),
+                'menu_item_name': (item.dish.name if item.dish else 'Producto'),
                 'quantity': item.quantity,
                 'price_at_purchase': str(item.price_at_purchase),
             }

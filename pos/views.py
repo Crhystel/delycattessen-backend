@@ -248,9 +248,12 @@ class POSFaceIdentificationView(BiometricValidationMixin, APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # 2. Match against encrypted vectors in database
-        matched_user, similarity = self.match_face(candidate_embedding, threshold=0.40)
-        print(f"[BIOMETRIC POS] Best candidate score: {similarity:.4f} (threshold: 0.40), Matched: {matched_user}")
+        # 2. Match against encrypted vectors in database (filtered by operative staff institution)
+        matched_user, similarity = self.match_face(
+            candidate_embedding,
+            institution=request.user.institution,
+            threshold=0.40,
+        )
 
         if not matched_user:
             return Response(

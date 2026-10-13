@@ -1,6 +1,9 @@
+import logging
 from rest_framework import generics, status
 from rest_framework.generics import get_object_or_404
 from rest_framework.response import Response
+
+logger = logging.getLogger(__name__)
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.views import APIView
@@ -130,8 +133,13 @@ class StudentRegistrationView(APIView):
         serializer.is_valid(raise_exception=True)
         student_profile = serializer.save()
 
+        biometric_registered = getattr(student_profile, 'biometric_registered', False)
         return Response(
-            {'student_id': student_profile.id, 'username': student_profile.user.username},
+            {
+                'student_id': student_profile.id,
+                'username': student_profile.user.username,
+                'biometric_registered': biometric_registered,
+            },
             status=201,
         )
 class ChildrenListView(generics.ListAPIView):
@@ -157,10 +165,9 @@ class ChildPhotoUpdateView(APIView):
             return Response({'error': 'No se envió ninguna imagen.'}, status=status.HTTP_400_BAD_REQUEST)
 
         photo = request.FILES['profile_picture']
-        student_profile.profile_picture = photo
-        student_profile.save()
 
-        # Update facial biometric embedding for POS face recognition
+        # Extract facial embedding with ORIGINAL photo before resizing/saving
+        biometric_registered = False
         try:
             from pos.mixins import BiometricValidationMixin
             from users.models import UserBiometric
@@ -177,11 +184,17 @@ class ChildPhotoUpdateView(APIView):
                     'is_active': True,
                 }
             )
-        except Exception:
-            pass
+            biometric_registered = True
+        except Exception as e:
+            logger.warning("[BIOMETRIC] Error al actualizar embedding facial de estudiante: %s", str(e))
 
-        serializer = ChildSerializer(student_profile)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        photo.seek(0)
+        student_profile.profile_picture = photo
+        student_profile.save()
+
+        data = ChildSerializer(student_profile).data
+        data['biometric_registered'] = biometric_registered
+        return Response(data, status=status.HTTP_200_OK)
     
 class AllergenListView(generics.ListAPIView):
     """GET /api/users/allergens/ - allergen catalog"""

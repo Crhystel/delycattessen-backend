@@ -63,6 +63,14 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
+### 3.1 Descargar modelos de reconocimiento facial
+
+Los modelos de detección (YuNet) y reconocimiento facial (SFace) deben descargarse antes de iniciar el sistema:
+
+```bash
+python manage.py download_biometric_models
+```
+
 ### 4. Configurar variables de entorno
 
 Copiar `.env.example` a `.env` y completar los valores reales (el archivo `.env` nunca se sube a git). Para desarrollo local agregar además:

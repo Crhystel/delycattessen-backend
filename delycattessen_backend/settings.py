@@ -167,6 +167,13 @@ CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 # No code reads task results: skip writing one DB row per task.
 CELERY_TASK_IGNORE_RESULT = True
+# Result expiration (default 1 day = timedelta(days=1), configurable via .env in days or seconds)
+_celery_result_expires_val = config('CELERY_RESULT_EXPIRES', default=1, cast=int)
+CELERY_RESULT_EXPIRES = (
+    timedelta(days=_celery_result_expires_val)
+    if _celery_result_expires_val <= 365
+    else timedelta(seconds=_celery_result_expires_val)
+)
 # Don't hold extra messages in the worker's memory.
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 
