@@ -1,7 +1,19 @@
 services:
   redis:
     image: redis:alpine
-    ports: ["6379:6379"]
+    # Cache only: cap memory and evict keys that have a TTL (all of ours do).
+    command: redis-server --maxmemory 64mb --maxmemory-policy volatile-lru
+    mem_limit: 128m
+    restart: unless-stopped
+    ports: ["127.0.0.1:6379:6379"]
   rabbitmq:
     image: rabbitmq:3-management
-    ports: ["5672:5672", "15672:15672"]
+    mem_limit: 512m
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    # Bound to localhost only; 15672 is the management panel.
+    ports: ["127.0.0.1:5672:5672", "127.0.0.1:15672:15672"]

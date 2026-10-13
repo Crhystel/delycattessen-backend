@@ -504,3 +504,24 @@ class PreOrderMonthlyMenuTests(TestCase):
         dish_pollo_data = next(dish for dish in future_day_data['dishes'] if dish['id'] == self.dish_pollo.id)
         self.assertFalse(dish_pollo_data['has_student_allergens'])
 
+
+
+class LazyBiometricImportsTests(TestCase):
+    """cv2/numpy must stay out of the web process until a face request needs them."""
+
+    def test_loading_urls_does_not_import_cv2_or_numpy(self):
+        import subprocess
+        import sys
+        from django.conf import settings
+
+        code = (
+            "import os, sys, django\n"
+            "os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'delycattessen_backend.settings')\n"
+            "django.setup()\n"
+            "import delycattessen_backend.urls, pos.mixins\n"
+            "sys.exit(int('cv2' in sys.modules) + 2 * int('numpy' in sys.modules))\n"
+        )
+        result = subprocess.run(
+            [sys.executable, '-c', code], cwd=settings.BASE_DIR, capture_output=True, text=True
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr[-500:])

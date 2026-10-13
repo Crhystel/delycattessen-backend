@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from rest_framework.exceptions import ValidationError
 from django.utils.translation import gettext_lazy as _
 
@@ -79,11 +81,13 @@ import gc
 import hashlib
 import logging
 import urllib.request
-import cv2
-import numpy as np
+from typing import TYPE_CHECKING
 from django.conf import settings
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from rest_framework.exceptions import ValidationError
+
+if TYPE_CHECKING:
+    import numpy as np  # type hints only; imported lazily at runtime
 
 logger = logging.getLogger(__name__)
 
@@ -118,11 +122,14 @@ class BiometricValidationMixin:
     """
 
     def _get_encryption_key(self) -> bytes:
-        """Derives a deterministic 256-bit (32 bytes) key from SECRET_KEY."""
-        return hashlib.sha256(settings.SECRET_KEY.encode('utf-8')).digest()
+        """Derives a deterministic 256-bit (32 bytes) key from the biometric seed."""
+        # Dedicated seed; falls back to SECRET_KEY for setups not migrated yet.
+        seed = settings.BIOMETRIC_ENCRYPTION_KEY or settings.SECRET_KEY
+        return hashlib.sha256(seed.encode('utf-8')).digest()
 
     def encrypt_embedding(self, vector: np.ndarray) -> tuple[bytes, bytes, bytes]:
         """Encrypts an embedding vector using AES-256-GCM."""
+        import numpy as np  # lazy: keeps numpy out of the web process until needed
         key = self._get_encryption_key()
         aesgcm = AESGCM(key)
         nonce = os.urandom(12)
@@ -135,6 +142,7 @@ class BiometricValidationMixin:
 
     def decrypt_embedding(self, ciphertext: bytes, nonce: bytes, tag: bytes) -> np.ndarray:
         """Decrypts an AES-256-GCM ciphertext back into a NumPy vector."""
+        import numpy as np  # lazy: keeps numpy out of the web process until needed
         key = self._get_encryption_key()
         aesgcm = AESGCM(key)
         full_ciphertext = bytes(ciphertext) + bytes(tag)
@@ -147,6 +155,9 @@ class BiometricValidationMixin:
         and extracts a 128-dimensional Deep SFace feature vector.
         Immediately obliterates the raw image buffer from memory.
         """
+        # Lazy imports: keep cv2/numpy out of the web process until a face request arrives.
+        import cv2
+        import numpy as np
         try:
             if hasattr(image_file_or_bytes, 'read'):
                 raw_bytes = image_file_or_bytes.read()
@@ -200,6 +211,7 @@ class BiometricValidationMixin:
 
     def calculate_similarity(self, vector_a: np.ndarray, vector_b: np.ndarray) -> float:
         """Calculates cosine similarity between two 128-d deep face embeddings."""
+        import numpy as np  # lazy: keeps numpy out of the web process until needed
         norm_a = np.linalg.norm(vector_a)
         norm_b = np.linalg.norm(vector_b)
         if norm_a == 0 or norm_b == 0:

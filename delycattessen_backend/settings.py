@@ -12,6 +12,8 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 
 from pathlib import Path
 
+from decouple import config
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -19,13 +21,18 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-5m_w6&i8^y3$____g41(eo8^dz&pbl+(@ki%ex3a_&*biaz!rp'
+# Required: no default, so the app refuses to start without it (set it in .env).
+SECRET_KEY = config('SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+# Secure by default: enable only through the environment (DEBUG=True in local .env).
+DEBUG = config('DEBUG', default=False, cast=bool)
 
-ALLOWED_HOSTS = ['*']
+ALLOWED_HOSTS = [
+    host.strip()
+    for host in config('ALLOWED_HOSTS', default='localhost,127.0.0.1').split(',')
+    if host.strip()
+]
 
 
 # Application definition
@@ -59,7 +66,12 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
-CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_ALL_ORIGINS = config('CORS_ALLOW_ALL_ORIGINS', default=False, cast=bool)
+CORS_ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in config('CORS_ALLOWED_ORIGINS', default='').split(',')
+    if origin.strip()
+]
 
 ROOT_URLCONF = 'delycattessen_backend.urls'
 
@@ -83,7 +95,6 @@ WSGI_APPLICATION = 'delycattessen_backend.wsgi.application'
 
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
-from decouple import config
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
@@ -92,6 +103,9 @@ DATABASES = {
         'PASSWORD': config('DB_PASSWORD'),
         'HOST': config('DB_HOST'),
         'PORT': config('DB_PORT'),
+        # 0 = new connection per request (current). Seconds to reuse connections otherwise.
+        'CONN_MAX_AGE': config('DB_CONN_MAX_AGE', default=0, cast=int),
+        'CONN_HEALTH_CHECKS': True,
     }
 }
 
@@ -151,6 +165,10 @@ CELERY_BROKER_URL = config('RABBITMQ_URL', default='amqp://guest:guest@localhost
 CELERY_RESULT_BACKEND = 'django-db'
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
+# No code reads task results: skip writing one DB row per task.
+CELERY_TASK_IGNORE_RESULT = True
+# Don't hold extra messages in the worker's memory.
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 
 # MODO DESARROLLO (RabbitMQ 4.x fix)
 CELERY_WORKER_ENABLE_REMOTE_CONTROL = False
@@ -184,3 +202,26 @@ PAYPHONE_ALLOWED_REDIRECT_HOSTS = [
     for host in config('PAYPHONE_ALLOWED_REDIRECT_HOSTS', default='').split(',')
     if host.strip()
 ]
+
+# Dedicated AES seed for facial embeddings (falls back to SECRET_KEY when empty).
+BIOMETRIC_ENCRYPTION_KEY = config('BIOMETRIC_ENCRYPTION_KEY', default='')
+
+# Shared cache (password-reset codes, QR nonces). Without REDIS_URL Django keeps
+# its default per-process memory cache.
+REDIS_URL = config('REDIS_URL', default='')
+if REDIS_URL:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+            'LOCATION': REDIS_URL,
+        }
+    }
+
+# Production hardening, opt-in so plain-HTTP development and tests keep working.
+if config('HTTPS_ONLY', default=False, cast=bool):
+    SECURE_SSL_REDIRECT = True
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_HSTS_SECONDS = 31536000
+    # Only valid behind a reverse proxy that sets X-Forwarded-Proto.
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
