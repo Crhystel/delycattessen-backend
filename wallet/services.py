@@ -13,6 +13,10 @@ class GatewayError(Exception):
     """Raised when an external payment gateway rejects or fails a charge request."""
 
 
+class GatewayUnavailableError(GatewayError):
+    """The request never reached the gateway, so retrying the charge is safe."""
+
+
 class PaymentGateway(ABC):
     """Template Method: fixes the recharge flow (validate -> pending record ->
     charge -> confirm -> credit balance). Subclasses only implement the
@@ -88,33 +92,42 @@ class KushkiGateway(PaymentGateway):
 
         parent_user = wallet.student.parent.user
 
-        response = requests.post(
-            f'{settings.KUSHKI_API_URL}/card/v1/charges',
-            json={
-                'token': token,
-                'amount': {
-                    'subtotalIva': 0,
-                    'subtotalIva0': float(amount),
-                    'ice': 0,
-                    'iva': 0,
-                    'currency': 'USD',
+        try:
+            response = requests.post(
+                f'{settings.KUSHKI_API_URL}/card/v1/charges',
+                json={
+                    'token': token,
+                    'amount': {
+                        'subtotalIva': 0,
+                        'subtotalIva0': float(amount),
+                        'ice': 0,
+                        'iva': 0,
+                        'currency': 'USD',
+                    },
+                    'contactDetails': {
+                        'documentType': document_type or 'CC',
+                        'documentNumber': document_number or '',
+                        'email': parent_user.email or '',
+                        'firstName': parent_user.first_name,
+                        'lastName': parent_user.last_name,
+                        'phoneNumber': phone_number or '',
+                    },
                 },
-                'contactDetails': {
-                    'documentType': document_type or 'CC',
-                    'documentNumber': document_number or '',
-                    'email': parent_user.email or '',
-                    'firstName': parent_user.first_name,
-                    'lastName': parent_user.last_name,
-                    'phoneNumber': phone_number or '',
+                headers={
+                    'Private-Merchant-Id': settings.KUSHKI_PRIVATE_MERCHANT_ID,
+                    'Content-Type': 'application/json',
                 },
-            },
-            headers={
-                'Private-Merchant-Id': settings.KUSHKI_PRIVATE_MERCHANT_ID,
-                'Content-Type': 'application/json',
-            },
-            timeout=10,
-        )
-        data = response.json()
+                timeout=10,
+            )
+            data = response.json()
+        except requests.ConnectionError as exc:
+            # Includes ConnectTimeout: the request never reached Kushki, retry is safe.
+            raise GatewayUnavailableError('Kushki no está disponible.') from exc
+        except requests.RequestException as exc:
+            # E.g. ReadTimeout or a non-JSON body: the charge may have gone through,
+            # so it must NOT be retried automatically.
+            raise GatewayError('Kushki no respondió al cobro.') from exc
+
         if response.status_code not in (200, 201) or 'ticketNumber' not in data:
             raise GatewayError(data.get('message', 'Kushki rechazó el cobro.'))
         return data['ticketNumber']

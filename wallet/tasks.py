@@ -17,9 +17,13 @@ def process_recharge_task(
     document_number: str = None,
     phone_number: str = None,
 ) -> None:
-    """Processes payment confirmation asynchronously via RabbitMQ."""
+    """Processes payment confirmation asynchronously via RabbitMQ.
+
+    Only retried when the gateway was unreachable (the request never got
+    through). A definitive rejection is not retried: it would only create more
+    FAILED transactions for the same declined card."""
     from decimal import Decimal
-    from .services import GatewayError, GatewayRouter
+    from .services import GatewayRouter, GatewayUnavailableError
 
     wallet = Wallet.objects.get(pk=wallet_id)
     gateway = GatewayRouter().get_gateway(Decimal(amount))
@@ -29,7 +33,7 @@ def process_recharge_task(
             document_type=document_type, document_number=document_number,
             phone_number=phone_number,
         )
-    except GatewayError as exc:
+    except GatewayUnavailableError as exc:
         raise self.retry(exc=exc)
 
 
