@@ -1,6 +1,9 @@
 import calendar
+import logging
 from datetime import date
+from functools import partial
 from typing import Sequence
+from kombu.exceptions import OperationalError
 from django.db import transaction
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
@@ -8,6 +11,19 @@ from rest_framework.exceptions import ValidationError
 
 from .models import MonthlyMenu, DailyMenu, MenuDish
 from .tasks import send_monthly_menu_published_email
+
+logger = logging.getLogger(__name__)
+
+
+def _notify_menu_published(monthly_menu_id: int) -> None:
+    """Enqueues the notification email. The menu is already committed as
+    PUBLISHED, so an unreachable broker must not turn the publish into a 500."""
+    try:
+        send_monthly_menu_published_email.delay(monthly_menu_id)
+    except (OperationalError, OSError):
+        logger.exception(
+            'Could not enqueue published-menu email for monthly menu %s', monthly_menu_id
+        )
 
 
 class MonthlyMenuService:
@@ -81,7 +97,7 @@ class MonthlyMenuService:
         monthly_menu.published_at = timezone.now()
         monthly_menu.save(update_fields=['status', 'published_at', 'updated_at'])
 
-        transaction.on_commit(lambda: send_monthly_menu_published_email.delay(monthly_menu.id))
+        transaction.on_commit(partial(_notify_menu_published, monthly_menu.id))
         return monthly_menu
 
     @classmethod

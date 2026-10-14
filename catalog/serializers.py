@@ -91,7 +91,7 @@ class MenuDishSerializer(IngredientValidationMixin, AllergenSyncMixin, serialize
     - ingredients is writable as a list of Ingredient IDs and represented nested on read.
     - allergens is read-only, calculated automatically via AllergenSyncMixin.
     - is_active is declared explicitly for multipart/form-data robustness.
-    - institution is assigned by the view from request.user.institution.
+    - institution is assigned by the view (the admin's write target).
     """
     is_active = serializers.BooleanField(default=True, required=False)
     price = serializers.DecimalField(max_digits=6, decimal_places=2, min_value=Decimal('0.01'))
@@ -113,7 +113,7 @@ class MenuDishSerializer(IngredientValidationMixin, AllergenSyncMixin, serialize
 
 class MonthlyMenuCreateSerializer(serializers.ModelSerializer):
     """
-    Validates creation of a MonthlyMenu for the admin's institution.
+    Validates creation of a MonthlyMenu for the target institution (context['institution']).
     """
     year = serializers.IntegerField(min_value=2000, max_value=2100)
     month = serializers.IntegerField(min_value=1, max_value=12)
@@ -123,8 +123,7 @@ class MonthlyMenuCreateSerializer(serializers.ModelSerializer):
         fields = ['year', 'month']
 
     def validate(self, attrs):
-        request = self.context.get('request')
-        institution = getattr(request.user, 'institution', None) if request else None
+        institution = self.context.get('institution')
         if not institution:
             raise serializers.ValidationError(_('El usuario no tiene una institución asignada.'))
 
@@ -174,7 +173,7 @@ class MonthlyMenuSerializer(serializers.ModelSerializer):
 class DailyMenuUpdateSerializer(serializers.Serializer):
     """
     Validates assigning dishes to a specific daily menu.
-    Requires dish_ids belonging to the admin's institution and active.
+    Requires dish_ids belonging to the target institution (context['institution']) and active.
     """
     dish_ids = serializers.ListField(
         child=serializers.IntegerField(),
@@ -182,8 +181,7 @@ class DailyMenuUpdateSerializer(serializers.Serializer):
     )
 
     def validate_dish_ids(self, value):
-        request = self.context.get('request')
-        institution = getattr(request.user, 'institution', None) if request else None
+        institution = self.context.get('institution')
         if not institution:
             raise serializers.ValidationError(_('El usuario no tiene una institución asignada.'))
 

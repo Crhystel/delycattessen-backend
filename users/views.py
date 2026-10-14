@@ -25,8 +25,9 @@ from .serializers import (
     VerifyPaymentPinSerializer,
     ChangePasswordSerializer,
 )
-from .permissions import IsAdministrator, IsParentUser, SameInstitutionPermission, CanRequestPasswordReset, CanManageAllergies, IsParentOfStudent
-from .mixins import InstitutionScopeMixin, TokenGeneratorMixin
+from .permissions import IsAdministrator, IsParentUser, SameInstitutionPermission, CanRequestPasswordReset, CanManageAllergies, IsParentOfStudent, CanRegisterBiometric
+from rest_framework.permissions import SAFE_METHODS
+from .mixins import InstitutionScopeMixin, TokenGeneratorMixin, resolve_write_institution
 from .models import CustomUser, Institution, StudentProfile
 from catalog.models import Allergen
 from rest_framework_simplejwt.views import TokenObtainPairView
@@ -44,8 +45,16 @@ class StaffViewSet(InstitutionScopeMixin, ModelViewSet):
         role__in=[CustomUser.Role.TEACHER, CustomUser.Role.OPERATIONS_STAFF]
     )
 
+    def get_serializer_context(self):
+        """Writes land in the admin's target institution (?institution=<id>,
+        otherwise their own sede), see resolve_write_institution."""
+        context = super().get_serializer_context()
+        if self.request.method not in SAFE_METHODS:
+            context['institution'] = resolve_write_institution(self.request)
+        return context
+
     def create(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data, context={'request': request})
+        serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
         return Response(
@@ -321,11 +330,13 @@ class DynamicQrTokenView(APIView):
 class RegisterBiometricView(BiometricValidationMixin, APIView):
     """
     POST /api/users/biometrics/register/
-    Registers or updates the biometric facial vector of a student, teacher, or user.
+    Registers or updates the biometric facial vector of a student (by their
+    parent) or a teacher (by an admin of the same institution); see
+    CanRegisterBiometric. No other role has biometrics.
     Strictly complies with Data Protection Laws:
     Extracts embedding vector, encrypts with AES-256-GCM, and destroys raw image in memory.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, CanRegisterBiometric]
     parser_classes = [MultiPartParser, FormParser]
 
     def post(self, request):
@@ -337,13 +348,20 @@ class RegisterBiometricView(BiometricValidationMixin, APIView):
             )
 
         target_user_id = request.data.get('target_user_id')
-        if target_user_id:
-            try:
-                target_user = CustomUser.objects.get(pk=target_user_id)
-            except CustomUser.DoesNotExist:
-                return Response({"detail": _("Usuario objetivo no encontrado.")}, status=status.HTTP_404_NOT_FOUND)
-        else:
-            target_user = request.user
+        if not target_user_id:
+            return Response(
+                {"detail": _("Debe indicar el usuario en el campo 'target_user_id'.")},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        try:
+            target_user = CustomUser.objects.select_related(
+                'student_profile__parent'
+            ).get(pk=target_user_id)
+        except (CustomUser.DoesNotExist, ValueError):
+            return Response({"detail": _("Usuario objetivo no encontrado.")}, status=status.HTTP_404_NOT_FOUND)
+
+        # Template: a single object-level check decides who may register whom.
+        self.check_object_permissions(request, target_user)
 
         # 1. Extract embedding vector (wipes raw frame memory)
         try:

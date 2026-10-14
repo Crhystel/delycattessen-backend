@@ -60,7 +60,13 @@ class CreateStaffSerializer(UppercaseNamesMixin, serializers.ModelSerializer):
         admin = request.user
 
         validated_data.pop('is_active', None)
-        institution = validated_data.pop('institution', None) or admin.institution
+        # Priority: explicit institution_id in the body, then the write target
+        # resolved by the view (?institution=<id>), then the admin's own sede.
+        institution = (
+            validated_data.pop('institution', None)
+            or self.context.get('institution')
+            or admin.institution
+        )
         temporary_password = generate_temporary_password()
 
         user = User.objects.create_user(

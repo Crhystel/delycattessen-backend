@@ -40,6 +40,12 @@ class Ingredient(models.Model):
         return self.name
 
 class MenuItem(models.Model):
+    institution = models.ForeignKey(
+        'users.Institution',
+        verbose_name=_('institution'),
+        on_delete=models.PROTECT,
+        related_name='menu_items',
+    )
     name = models.CharField(_('name'), max_length=200)
     description = models.TextField(_('description'), blank=True)
     category = models.CharField(_('category'), max_length=100, blank=True)

@@ -234,19 +234,33 @@ class BiometricValidationMixin:
             return 0.0
         return float(np.dot(vector_a.flatten(), vector_b.flatten()) / (norm_a * norm_b))
 
-    def match_face(self, candidate_embedding: np.ndarray, institution=None, threshold: float = 0.40):
+    def match_face(
+        self,
+        candidate_embedding: np.ndarray,
+        institution=None,
+        threshold: float = 0.40,
+        all_institutions: bool = False,
+    ):
         """
         Matches a candidate embedding against active registered biometric embeddings in memory.
-        If institution is provided, filters strictly for students of that institution
-        (user__student_profile__institution) and teachers (user__institution) (RNF-04).
+        Only students (user__student_profile__institution) and teachers (user__institution)
+        have biometrics, and they are filtered strictly by `institution` (RNF-04).
+        Matching across every institution requires the explicit all_institutions=True
+        (admin consolidated view); a missing institution never widens the search.
         Performs vectorized cosine comparison with NumPy.
         Returns (matched_user, similarity_score) or (None, -1.0).
         """
         import numpy as np
         from django.db.models import Q
-        from users.models import UserBiometric
+        from users.models import CustomUser, UserBiometric
 
-        qs = UserBiometric.objects.filter(is_active=True)
+        if institution is None and not all_institutions:
+            raise ValueError('An institution is required to match a face.')
+
+        qs = UserBiometric.objects.filter(
+            is_active=True,
+            user__role__in=[CustomUser.Role.STUDENT, CustomUser.Role.TEACHER],
+        )
         if institution is not None:
             qs = qs.filter(
                 Q(user__student_profile__institution=institution) | Q(user__institution=institution)

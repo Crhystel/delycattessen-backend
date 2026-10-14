@@ -1,6 +1,7 @@
 from rest_framework import generics
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from users.permissions import IsAdministrator
+from users.mixins import OwnInstitutionMixin, ViewerInstitutionMixin
 from .models import MenuItem, Ingredient, Allergen
 from .serializers import (
     MenuItemSerializer,
@@ -11,13 +12,15 @@ from .serializers import (
 )
 
 
-class MenuListView(generics.ListAPIView):
+class MenuListView(ViewerInstitutionMixin, generics.ListAPIView):
+    """Products of a single institution; see ViewerInstitutionMixin for how
+    it is chosen per role (parents pass ?student_id=)."""
     queryset = MenuItem.objects.filter(is_active=True, is_visible=True)
     serializer_class = MenuItemSerializer
     permission_classes = [IsAuthenticated]
 
 
-class AdminMenuListView(generics.ListAPIView):
+class AdminMenuListView(OwnInstitutionMixin, generics.ListAPIView):
     """Only active products: a "deleted" (is_active=False) product should
     disappear from the admin catalog too, not just from the parent-facing
     menu. The row stays in the database so historical PreOrderItem records
@@ -25,16 +28,19 @@ class AdminMenuListView(generics.ListAPIView):
 
     queryset = MenuItem.objects.filter(is_active=True).order_by('name')
     serializer_class = MenuItemSerializer
-    permission_classes = [IsAdminUser]
+    permission_classes = [IsAdministrator]
 
 
-class MenuItemCreateView(generics.CreateAPIView):
+class MenuItemCreateView(OwnInstitutionMixin, generics.CreateAPIView):
     queryset = MenuItem.objects.all()
     serializer_class = MenuItemSerializer
-    permission_classes = [IsAdminUser]
+    permission_classes = [IsAdministrator]
+
+    def perform_create(self, serializer):
+        serializer.save(institution=self.get_user_institution())
 
 
-class MenuItemDetailView(generics.RetrieveUpdateDestroyAPIView):
+class MenuItemDetailView(OwnInstitutionMixin, generics.RetrieveUpdateDestroyAPIView):
     """DELETE never hard-deletes: it soft-deletes by flipping is_active
     (and is_visible) to False. A real DB delete would fail anyway once the
     product has any PreOrderItem history (FK is on_delete=PROTECT), and
@@ -43,7 +49,7 @@ class MenuItemDetailView(generics.RetrieveUpdateDestroyAPIView):
 
     queryset = MenuItem.objects.all()
     serializer_class = MenuItemSerializer
-    permission_classes = [IsAdminUser]
+    permission_classes = [IsAdministrator]
 
     def perform_destroy(self, instance):
         instance.is_active = False
@@ -87,7 +93,7 @@ class AllergenCreateView(generics.CreateAPIView):
     permission_classes = [IsAuthenticated]
 
 
-from datetime import datetime
+from datetime import datetime, timedelta
 import zoneinfo
 from django.db.models import Prefetch
 from django.shortcuts import get_object_or_404
@@ -97,8 +103,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.exceptions import ValidationError
 from users.models import StudentProfile
-from users.permissions import IsAdministrator, IsParentOfStudent
-from users.mixins import OwnInstitutionMixin
+from users.permissions import IsAdministrator, IsParentOfStudent, IsOperativeUser, SameInstitutionAsTarget
 from .models import MenuDish, MonthlyMenu, DailyMenu
 from .serializers import (
     MenuDishSerializer,
@@ -213,10 +218,13 @@ class DailyMenuUpdateView(OwnInstitutionMixin, generics.GenericAPIView):
             raise ValidationError({'date': _('Formato de fecha inválido. Utilice YYYY-MM-DD.')})
 
         daily_menu = get_object_or_404(DailyMenu, monthly_menu=monthly_menu, date=parsed_date)
-        serializer = DailyMenuUpdateSerializer(data=request.data, context={'request': request})
+        serializer = DailyMenuUpdateSerializer(data=request.data, context=self.get_serializer_context())
         serializer.is_valid(raise_exception=True)
 
-        dishes = list(MenuDish.objects.filter(id__in=serializer.validated_data['dish_ids']))
+        dishes = list(MenuDish.objects.filter(
+            id__in=serializer.validated_data['dish_ids'],
+            institution=monthly_menu.institution,
+        ))
         MonthlyMenuService.set_day_dishes(daily_menu, dishes)
         return Response(DailyMenuSerializer(daily_menu).data, status=status.HTTP_200_OK)
 
@@ -253,25 +261,30 @@ class MonthlyMenuUnpublishView(OwnInstitutionMixin, generics.GenericAPIView):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
-class StudentMonthlyMenuView(APIView):
+class BaseStudentMenuView(APIView):
     """
-    GET /api/catalog/students/<int:student_id>/monthly_menu/
-    Returns business days (with date > today_ec) from published monthly menus
-    belonging to the student's institution, including dish information, parental
-    control blockers, and allergen alerts for the child.
+    Template Method: published menu of a student's own institution, with
+    parental-control blockers and allergen alerts. Subclasses only vary the
+    permission, the first valid date (`first_date`) and the extra object check.
     """
-    permission_classes = [IsParentOfStudent]
+
+    def first_date(self, today):
+        return today
+
+    def check_student(self, request, student):
+        self.check_object_permissions(request, student)
 
     def get(self, request, student_id):
         student = get_object_or_404(
             StudentProfile.objects.select_related('institution', 'parental_control').prefetch_related('allergies'),
             id=student_id,
         )
+        self.check_student(request, student)
         today_ec = datetime.now(zoneinfo.ZoneInfo('America/Guayaquil')).date()
         days = DailyMenu.objects.filter(
             monthly_menu__institution=student.institution,
             monthly_menu__status=MonthlyMenu.Status.PUBLISHED,
-            date__gt=today_ec,
+            date__gte=self.first_date(today_ec),
         ).prefetch_related(
             Prefetch('dishes', queryset=MenuDish.objects.filter(is_active=True).prefetch_related('allergens'))
         ).order_by('date')
@@ -282,4 +295,26 @@ class StudentMonthlyMenuView(APIView):
             'student_allergy_ids': set(student.allergies.values_list('id', flat=True)),
         }
         serializer = StudentDailyMenuSerializer(days, many=True, context=context)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class StudentMonthlyMenuView(BaseStudentMenuView):
+    """
+    GET /api/catalog/students/<int:student_id>/monthly_menu/
+    Parent view: business days after today from published monthly menus of
+    the child's institution.
+    """
+    permission_classes = [IsParentOfStudent]
+
+    def first_date(self, today):
+        return today + timedelta(days=1)
+
+
+class POSStudentMenuView(BaseStudentMenuView):
+    """
+    GET /api/catalog/pos/students/<int:student_id>/menu/
+    Staff view used to choose dishes for an identified student: published
+    menus from today onward, restricted to the operator's own institution
+    (an admin may widen it with ?institution=all).
+    """
+    permission_classes = [IsOperativeUser, SameInstitutionAsTarget]

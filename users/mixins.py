@@ -1,37 +1,136 @@
 import random
 from django.core.cache import cache
 from django.contrib.auth.tokens import default_token_generator
+from rest_framework.permissions import SAFE_METHODS
 
 CODE_TTL_SECONDS = 900  # 15 minutes
+
+
+ALL_INSTITUTIONS = 'all'
+
+
+def resolve_institution_scope(request):
+    """
+    Single source of truth for institution (sede) data scope.
+
+    Returns an Institution to filter by, or None meaning "all institutions".
+    - ADMIN: own institution by default; may ask for a specific one
+      (?institution=<id>) or the consolidated view (?institution=all).
+    - Any other role: always its own institution; the query param is ignored.
+    Raises PermissionDenied if the user has no institution and did not
+    explicitly request one (admins only), ValidationError on a bad param.
+    """
+    from rest_framework.exceptions import PermissionDenied, ValidationError
+    from django.utils.translation import gettext as _
+    from .models import CustomUser, Institution
+
+    user = request.user
+    if user.role == CustomUser.Role.ADMIN:
+        param = request.query_params.get('institution')
+        if param == ALL_INSTITUTIONS:
+            return None
+        if param:
+            try:
+                return Institution.objects.get(pk=int(param))
+            except (ValueError, Institution.DoesNotExist):
+                raise ValidationError({'institution': _('Institución inválida.')})
+
+    institution = getattr(user, 'institution', None)
+    if institution is None:
+        raise PermissionDenied(_('No tiene una institución asignada para realizar esta acción.'))
+    return institution
+
+
+def resolve_write_institution(request):
+    """
+    Institution where a write (create/update/delete) lands. Never "all":
+    - ADMIN: the institution given in ?institution=<id>, otherwise (no param
+      or ?institution=all) their own institution.
+    - Any other role: always its own institution; the query param is ignored.
+    Raises PermissionDenied if the resolved user has no institution and
+    ValidationError on a bad param (both from resolve_institution_scope).
+    """
+    from rest_framework.exceptions import PermissionDenied
+    from django.utils.translation import gettext as _
+
+    institution = resolve_institution_scope(request)
+    if institution is not None:
+        return institution
+
+    own = getattr(request.user, 'institution', None)
+    if own is None:
+        raise PermissionDenied(_('No tiene una institución asignada para realizar esta acción.'))
+    return own
+
+
+class ViewerInstitutionMixin:
+    """
+    Mixin Pattern for read-only endpoints open to every role (e.g. the product
+    menu): the institution whose data is shown depends on who is asking.
+
+    - STUDENT: the institution of their own student profile.
+    - PARENT: the institution of the child given in ?student_id= (must be
+      their own child).
+    - ADMIN / staff / teacher: resolve_institution_scope (admin may widen it).
+    Returns an Institution, or None for the consolidated admin view.
+    """
+    institution_lookup = 'institution'
+
+    def get_viewer_institution(self):
+        from rest_framework.exceptions import PermissionDenied, ValidationError
+        from django.utils.translation import gettext as _
+        from .models import CustomUser, StudentProfile
+
+        user = self.request.user
+        if user.role == CustomUser.Role.STUDENT:
+            profile = getattr(user, 'student_profile', None)
+            if profile is None:
+                raise PermissionDenied(_('No tiene una institución asignada para realizar esta acción.'))
+            return profile.institution
+
+        if user.role == CustomUser.Role.PARENT:
+            student_id = self.request.query_params.get('student_id')
+            if not student_id:
+                raise ValidationError({'student_id': _('Debe indicar el estudiante.')})
+            try:
+                student = StudentProfile.objects.select_related('institution').get(
+                    pk=int(student_id), parent__user=user,
+                )
+            except (ValueError, StudentProfile.DoesNotExist):
+                raise PermissionDenied(_('No tienes permiso sobre este estudiante'))
+            return student.institution
+
+        return resolve_institution_scope(self.request)
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        institution = self.get_viewer_institution()
+        if institution is None:
+            return queryset
+        return queryset.filter(**{self.institution_lookup: institution})
 
 
 class InstitutionScopeMixin:
     """
     Mixin Pattern (Template Method over DRF's get_queryset): defines the
-    data scope based on role and an optional 'institution' query parameter.
-
-    - Operations Staff: always restricted to their own institution.
-    - Administrator: defaults to their own institution; can request a
-      specific institution (?institution=<id>) or a consolidated view
-      across all institutions (?institution=all).
+    data scope based on role and an optional 'institution' query parameter
+    (see resolve_institution_scope). Only teachers and operations staff
+    are exposed through this mixin; other roles get an empty queryset.
     """
     def get_queryset(self):
         queryset = super().get_queryset()
-        user = self.request.user
         from .models import CustomUser
 
-        if user.role == CustomUser.Role.OPERATIONS_STAFF:
-            return queryset.filter(institution=user.institution)
+        if self.request.user.role not in (CustomUser.Role.OPERATIONS_STAFF, CustomUser.Role.ADMIN):
+            return queryset.none()
 
-        if user.role == CustomUser.Role.ADMIN:
-            institution_param = self.request.query_params.get('institution')
-            if institution_param == 'all':
-                return queryset
-            if institution_param:
-                return queryset.filter(institution_id=institution_param)
-            return queryset.filter(institution=user.institution)
-
-        return queryset.none()
+        if self.request.method in SAFE_METHODS:
+            institution = resolve_institution_scope(self.request)
+        else:
+            institution = resolve_write_institution(self.request)
+        if institution is None:
+            return queryset
+        return queryset.filter(institution=institution)
 
 
 class TokenGeneratorMixin:
@@ -65,22 +164,32 @@ class UppercaseNamesMixin:
 class OwnInstitutionMixin:
     """
     Mixin Pattern (over DRF's get_queryset): enforces multi-tenant scoping
-    strictly to the authenticated user's institution (request.user.institution).
-    Ignores any ?institution= query param.
-    Raises PermissionDenied if the user does not have an institution assigned.
-    Provides get_user_institution() helper for perform_create.
+    to the authenticated user's institution. Only an ADMIN may widen or move the read
+    scope with ?institution=<id> or ?institution=all (resolve_institution_scope).
+    Writes land in the target institution (resolve_write_institution): an
+    ADMIN's ?institution=<id>, otherwise their own; never "all".
+    get_user_institution() (used by perform_create and the write queryset)
+    returns that target.
     """
     institution_lookup = 'institution'
 
     def get_user_institution(self):
-        from rest_framework.exceptions import PermissionDenied
-        user = self.request.user
-        institution = getattr(user, 'institution', None)
-        if not institution:
-            raise PermissionDenied('No tiene una institución asignada para realizar esta acción.')
-        return institution
+        return resolve_write_institution(self.request)
+
+    def get_serializer_context(self):
+        """Hands the write target to serializers so validations (duplicates,
+        dish ownership) run against it instead of the user's own sede."""
+        context = super().get_serializer_context()
+        if self.request.method not in SAFE_METHODS:
+            context['institution'] = self.get_user_institution()
+        return context
 
     def get_queryset(self):
         queryset = super().get_queryset()
-        institution = self.get_user_institution()
+        if self.request.method in SAFE_METHODS:
+            institution = resolve_institution_scope(self.request)
+        else:
+            institution = self.get_user_institution()
+        if institution is None:
+            return queryset
         return queryset.filter(**{self.institution_lookup: institution})

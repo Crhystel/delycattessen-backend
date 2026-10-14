@@ -155,7 +155,8 @@ from django.conf import settings
 from django.core.cache import cache
 from rest_framework.views import APIView
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
-from users.permissions import IsOperativeUser
+from users.permissions import IsOperativeUser, SameInstitutionAsTarget
+from users.mixins import resolve_institution_scope
 from users.models import CustomUser
 from .mixins import BiometricValidationMixin
 
@@ -249,10 +250,12 @@ class POSFaceIdentificationView(BiometricValidationMixin, APIView):
             )
 
         # 2. Match against encrypted vectors in database (filtered by operative staff institution)
+        institution = resolve_institution_scope(request)
         matched_user, similarity = self.match_face(
             candidate_embedding,
-            institution=request.user.institution,
+            institution=institution,
             threshold=0.40,
+            all_institutions=institution is None,
         )
 
         if not matched_user:
@@ -277,7 +280,7 @@ class POSQrIdentificationView(APIView):
     expiration (TTL 300s), and single-use nonce to prevent replay attacks.
     Strictly protected for OPERATIONS_STAFF.
     """
-    permission_classes = [IsOperativeUser]
+    permission_classes = [IsOperativeUser, SameInstitutionAsTarget]
     parser_classes = [JSONParser]
 
     def post(self, request, *args, **kwargs):
@@ -337,6 +340,7 @@ class POSQrIdentificationView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
 
+        self.check_object_permissions(request, user)
         return Response(
             _build_identified_user_payload(user, method="DYNAMIC_QR"),
             status=status.HTTP_200_OK
@@ -349,10 +353,11 @@ class PreOrderDeliverView(APIView):
     operativo tras identificar al estudiante en el POS. Solo puede
     entregarse una preorden cuya fecha de entrega sea hoy y esté en estado PENDING.
     """
-    permission_classes = [IsOperativeUser]
+    permission_classes = [IsOperativeUser, SameInstitutionAsTarget]
 
     def patch(self, request, pre_order_id):
-        pre_order = get_object_or_404(PreOrder.objects.select_related('daily_menu'), pk=pre_order_id)
+        pre_order = get_object_or_404(PreOrder.objects.select_related('daily_menu', 'student'), pk=pre_order_id)
+        self.check_object_permissions(request, pre_order)
         if pre_order.status != PreOrder.Status.PENDING:
             return Response(
                 {"detail": _("Esta preorden no está pendiente de entrega.")},

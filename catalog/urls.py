@@ -17,6 +17,7 @@ from .views import (
     MonthlyMenuPublishView,
     MonthlyMenuUnpublishView,
     StudentMonthlyMenuView,
+    POSStudentMenuView,
 )
 
 urlpatterns = [
@@ -38,4 +39,5 @@ urlpatterns = [
     path('monthly_menus/<int:pk>/publish/', MonthlyMenuPublishView.as_view(), name='monthly_menu_publish'),
     path('monthly_menus/<int:pk>/unpublish/', MonthlyMenuUnpublishView.as_view(), name='monthly_menu_unpublish'),
     path('students/<int:student_id>/monthly_menu/', StudentMonthlyMenuView.as_view(), name='student_monthly_menu'),
+    path('pos/students/<int:student_id>/menu/', POSStudentMenuView.as_view(), name='pos_student_menu'),
 ]
