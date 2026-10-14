@@ -548,7 +548,8 @@ class BiometricModelReuseAndFilteringTests(TestCase, BiometricValidationMixin):
             mock_recognizer.alignCrop.return_value = np.zeros((112, 112, 3), dtype=np.uint8)
             mock_recognizer.feature.return_value = np.ones((1, 128), dtype=np.float32)
 
-            with patch('cv2.FaceDetectorYN.create', return_value=mock_detector) as mock_create_det, \
+            with patch('pos.mixins._get_biometric_model_paths', return_value=('fake_yunet.onnx', 'fake_sface.onnx')), \
+                 patch('cv2.FaceDetectorYN.create', return_value=mock_detector) as mock_create_det, \
                  patch('cv2.FaceRecognizerSF.create', return_value=mock_recognizer) as mock_create_rec:
 
                 # Dummy 100x100 RGB image encoded as JPEG
@@ -568,6 +569,22 @@ class BiometricModelReuseAndFilteringTests(TestCase, BiometricValidationMixin):
             with mixins_module._BIOMETRIC_LOCK:
                 mixins_module._FACE_DETECTOR = orig_detector
                 mixins_module._FACE_RECOGNIZER = orig_recognizer
+
+    def test_get_biometric_model_paths_raises_filenotfound_when_models_missing(self):
+        """_get_biometric_model_paths must raise FileNotFoundError if onnx models do not exist."""
+        import tempfile
+        from django.test import override_settings
+        from pos.mixins import _get_biometric_model_paths
+
+        with tempfile.TemporaryDirectory() as empty_dir:
+            with override_settings(BASE_DIR=empty_dir):
+                with self.assertRaises(FileNotFoundError) as ctx:
+                    _get_biometric_model_paths()
+
+                self.assertIn(
+                    "Modelos biométricos no encontrados. Ejecuta 'python manage.py download_biometric_models' para descargarlos.",
+                    str(ctx.exception),
+                )
 
     def test_match_face_filters_by_institution(self):
         """match_face must not return a matched user from another institution."""
