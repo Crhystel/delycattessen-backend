@@ -80,6 +80,14 @@ class Transaction(models.Model):
         blank=True,
         related_name='transactions',
     )
+    sale = models.ForeignKey(
+        'pos.Sale',
+        verbose_name=_('sale'),
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='transactions',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

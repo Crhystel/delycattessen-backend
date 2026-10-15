@@ -16,8 +16,8 @@ from .models import Sale, SaleItem
 class SaleProcessor(AllergenValidatorMixin):
     """
     Template Method: process() fixes the sale flow (lock products -> validate
-    customer -> charge -> register sale -> discount stock). Subclasses only
-    change who can be the customer and how the amount is charged.
+    customer -> register sale -> charge -> discount stock). Subclasses only
+    change who can be the customer and how the sale is charged.
     """
     payment_method = None
     allowed_roles = ()
@@ -36,7 +36,6 @@ class SaleProcessor(AllergenValidatorMixin):
         total = sum((item.price * quantity for item, quantity in items), Decimal('0.00'))
 
         self.validate_customer(items, total)
-        self.charge(total)
 
         sale = Sale.objects.create(
             institution=self.institution,
@@ -49,6 +48,7 @@ class SaleProcessor(AllergenValidatorMixin):
             SaleItem(sale=sale, menu_item=item, quantity=quantity, price_at_purchase=item.price)
             for item, quantity in items
         ])
+        self.charge(sale)
         self._discount_stock(items)
         return sale
 
@@ -67,7 +67,7 @@ class SaleProcessor(AllergenValidatorMixin):
         """Object whose `allergies` are checked against the products."""
         return self.customer
 
-    def charge(self, total):
+    def charge(self, sale):
         """Money movement; nothing to do unless the payment method moves money."""
 
     def _lock_items(self, lines):
@@ -130,7 +130,8 @@ class WalletSaleProcessor(ParentalControlValidatorMixin, SaleProcessor):
         super().validate_customer(items, total)
         self.validate_parental_controls(self.customer.student_profile, total)
 
-    def charge(self, total):
+    def charge(self, sale):
+        total = sale.total_amount
         wallet = Wallet.objects.select_for_update().get(student=self.customer.student_profile)
         if wallet.balance < total:
             raise ValidationError(
@@ -145,6 +146,7 @@ class WalletSaleProcessor(ParentalControlValidatorMixin, SaleProcessor):
             amount=total,
             status=Transaction.Status.SUCCESS,
             type=Transaction.Type.CONSUMPTION,
+            sale=sale,
         )
 
 

@@ -3,6 +3,8 @@ from decimal import Decimal
 import zoneinfo
 
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
 
@@ -132,6 +134,38 @@ class SaleTests(APITestCase):
         transaction = Transaction.objects.get(wallet=self.wallet)
         self.assertEqual((transaction.type, transaction.status, transaction.amount),
                          (Transaction.Type.CONSUMPTION, Transaction.Status.SUCCESS, Decimal('5.00')))
+        self.assertEqual(transaction.sale, Sale.objects.get())
+
+    def test_wallet_history_shows_pos_purchase_with_products(self):
+        self._auth(self.staff_a)
+        lines = [{'menu_item_id': self.item.id, 'quantity': 1}, {'menu_item_id': self.other_item.id, 'quantity': 2}]
+        self.assertEqual(self._sell('WALLET', lines, user=self.student_user).status_code, 201)
+
+        self._auth(self.parent_user)
+        response = self.client.get(f'/api/wallet/{self.wallet.id}/transactions/')
+        self.assertEqual(response.status_code, 200)
+        row = response.data[0]
+        self.assertEqual(row['display_name'], 'Sandwich y 1 más')
+        self.assertEqual(
+            [(i['menu_item_name'], i['quantity'], i['price_at_purchase']) for i in row['items']],
+            [('Sandwich', 1, '2.50'), ('Jugo', 2, '1.00')],
+        )
+
+    def test_wallet_history_query_count_does_not_grow_with_sales(self):
+        self._auth(self.staff_a)
+        self._sell('WALLET', [{'menu_item_id': self.item.id, 'quantity': 1}], user=self.student_user)
+        self._auth(self.parent_user)
+        url = f'/api/wallet/{self.wallet.id}/transactions/'
+        self.client.get(url)
+        with CaptureQueriesContext(connection) as one_sale:
+            self.client.get(url)
+        self._auth(self.staff_a)
+        for _ in range(3):
+            self._sell('WALLET', [{'menu_item_id': self.item.id, 'quantity': 1}], user=self.student_user)
+        self._auth(self.parent_user)
+        with CaptureQueriesContext(connection) as four_sales:
+            self.client.get(url)
+        self.assertEqual(len(four_sales), len(one_sale))
 
     def test_wallet_with_insufficient_balance_changes_nothing(self):
         self.wallet.balance = Decimal('1.00')
@@ -213,6 +247,9 @@ class SaleTests(APITestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data['accumulated_total'], '6.00')
         self.assertEqual(len(response.data['results']), 3)
+        newest = response.data['results'][0]
+        self.assertEqual((newest['display_name'], newest['total_amount']), ('Jugo', '1.00'))
+        self.assertRegex(newest['time'], r'^\d{1,2}:\d{2} (am|pm)$')
         self.assertEqual({row['payment_method'] for row in response.data['results']}, {'CREDIT'})
 
         self._auth(self.teacher_b)

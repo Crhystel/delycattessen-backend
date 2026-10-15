@@ -1,5 +1,7 @@
 from rest_framework import serializers
-from .models import PreOrder, PreOrderItem, Sale, SaleItem
+
+from delycattessen_backend.serializer_mixins import LineSummaryMixin
+from .models import PreOrder, PreOrderItem, Sale
 
 
 class PreOrderItemDetailSerializer(serializers.ModelSerializer):
@@ -51,17 +53,10 @@ class SaleCreateSerializer(serializers.Serializer):
     items = SaleItemInputSerializer(many=True, allow_empty=False)
 
 
-class SaleItemSerializer(serializers.ModelSerializer):
-    menu_item_name = serializers.CharField(source='menu_item.name', read_only=True)
-
-    class Meta:
-        model = SaleItem
-        fields = ('menu_item_name', 'quantity', 'price_at_purchase')
-
-
-class SaleSerializer(serializers.ModelSerializer):
-    items = SaleItemSerializer(many=True, read_only=True)
-
+class SaleSerializer(LineSummaryMixin, serializers.ModelSerializer):
     class Meta:
         model = Sale
-        fields = ('id', 'payment_method', 'total_amount', 'created_at', 'items')
+        fields = ('id', 'payment_method', 'total_amount', 'created_at', 'display_name', 'time', 'items')
+
+    def get_lines(self, obj):
+        return [(item.menu_item.name, item.quantity, item.price_at_purchase) for item in obj.items.all()]
