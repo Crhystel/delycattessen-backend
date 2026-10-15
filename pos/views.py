@@ -6,7 +6,9 @@ from rest_framework.response import Response
 from django.db import transaction
 from rest_framework.permissions import IsAuthenticated
 from django.utils.translation import gettext_lazy as _
-from .serializers import PreOrderCreateSerializer, PreOrderListSerializer, SaleCreateSerializer, SaleSerializer
+from .serializers import (
+    ParentSaleSerializer, PreOrderCreateSerializer, PreOrderListSerializer, SaleCreateSerializer, SaleSerializer,
+)
 from .models import PreOrder, PreOrderItem, Sale
 from .services import LOCAL_TIMEZONE, monthly_credit_total, process_sale
 from .mixins import AllergenValidatorMixin, ParentalControlValidatorMixin
@@ -439,3 +441,27 @@ class CreditHistoryView(APIView):
             'accumulated_total': str(monthly_credit_total(request.user)),
             'results': SaleSerializer(sales[:self.max_results], many=True).data,
         })
+
+
+class ParentSaleListView(generics.ListAPIView):
+    """
+    GET /api/pos/sales/history/?student_id=<id>  (student_id is optional)
+    Point-of-sale purchases (cash, credit or wallet) of the authenticated
+    parent's children, newest first. With student_id it narrows to that child
+    (still limited to the parent's own children).
+    """
+    serializer_class = ParentSaleSerializer
+    permission_classes = [IsParentUser]
+    pagination_class = None
+    max_results = 200
+
+    def get_queryset(self):
+        queryset = Sale.objects.filter(
+            customer__student_profile__parent=self.request.user.parent_profile,
+        ).select_related('customer__student_profile').prefetch_related('items__menu_item')
+
+        student_id = self.request.query_params.get('student_id')
+        if student_id:
+            queryset = queryset.filter(customer__student_profile__id=student_id)
+
+        return queryset.order_by('-created_at')[:self.max_results]

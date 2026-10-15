@@ -60,3 +60,17 @@ class SaleSerializer(LineSummaryMixin, serializers.ModelSerializer):
 
     def get_lines(self, obj):
         return [(item.menu_item.name, item.quantity, item.price_at_purchase) for item in obj.items.all()]
+
+
+class ParentSaleSerializer(SaleSerializer):
+    """Point-of-sale purchase of one of the parent's children (parent history)."""
+    student_id = serializers.IntegerField(source='customer.student_profile.id', read_only=True)
+    student_name = serializers.SerializerMethodField()
+    payment_method_display = serializers.CharField(source='get_payment_method_display', read_only=True)
+
+    class Meta(SaleSerializer.Meta):
+        fields = SaleSerializer.Meta.fields + ('student_id', 'student_name', 'payment_method_display')
+
+    def get_student_name(self, obj):
+        user = obj.customer
+        return f"{user.first_name} {user.last_name}".strip() or user.username

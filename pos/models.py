@@ -48,9 +48,9 @@ class PreOrderItem(models.Model):
 
 class Sale(models.Model):
     class PaymentMethod(models.TextChoices):
-        CASH = 'CASH', _('Cash')
-        CREDIT = 'CREDIT', _('Institutional credit')
-        WALLET = 'WALLET', _('Wallet balance')
+        CASH = 'CASH', _('Efectivo')
+        CREDIT = 'CREDIT', _('Crédito institucional')
+        WALLET = 'WALLET', _('Saldo de billetera')
 
     institution = models.ForeignKey(
         'users.Institution', verbose_name=_('institution'),

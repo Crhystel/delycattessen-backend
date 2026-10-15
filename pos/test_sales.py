@@ -282,3 +282,51 @@ class SaleTests(APITestCase):
         payload = _build_identified_user_payload(self.student_user, 'QR_CODE')
         self.assertEqual(payload['role_display'], 'Estudiante')
         self.assertIsNone(payload['credit_accumulated'])
+
+    # ---- parent purchase history ------------------------------------------------
+    HISTORY = '/api/pos/sales/history/'
+
+    def test_parent_sees_children_pos_purchases_with_payment_label(self):
+        self._auth(self.staff_a)
+        self._sell('CASH', user=self.student_user)
+        self._sell('WALLET', user=self.student_user,
+                   items=[{'menu_item_id': self.other_item.id, 'quantity': 1}])
+
+        self._auth(self.parent_user)
+        response = self.client.get(self.HISTORY)
+        self.assertEqual(response.status_code, 200)
+        rows = response.data
+        self.assertEqual({row['payment_method'] for row in rows}, {'CASH', 'WALLET'})
+        self.assertEqual({row['payment_method_display'] for row in rows}, {'Efectivo', 'Saldo de billetera'})
+        self.assertEqual({row['student_id'] for row in rows}, {self.student.id})
+        self.assertTrue(all(row['student_name'] and row['items'] for row in rows))
+
+    def test_parent_history_excludes_other_families_and_filters_by_child(self):
+        other_parent_user = CustomUser.objects.create_user(
+            username='parent2', email='p2@x.com', password='x', role=CustomUser.Role.PARENT)
+        other_parent = ParentProfile.objects.create(user=other_parent_user)
+        other_student_user = CustomUser.objects.create_user(
+            username='student2', email='st2@x.com', password='x', role=CustomUser.Role.STUDENT)
+        StudentProfile.objects.create(
+            user=other_student_user, parent=other_parent, institution=self.inst_a,
+            profile_picture=SimpleUploadedFile('s2.gif', GIF, content_type='image/gif'))
+
+        self._auth(self.staff_a)
+        self._sell('CASH', user=self.student_user)
+        self._sell('CASH', user=other_student_user)
+
+        self._auth(self.parent_user)
+        self.assertEqual(len(self.client.get(self.HISTORY).data), 1)
+        self.assertEqual(len(self.client.get(f'{self.HISTORY}?student_id={self.student.id}').data), 1)
+        self.assertEqual(self.client.get(f'{self.HISTORY}?student_id=999999').data, [])
+
+    def test_parent_history_is_parent_only(self):
+        for user in (self.staff_a, self.teacher_a, self.student_user):
+            self._auth(user)
+            self.assertEqual(self.client.get(self.HISTORY).status_code, 403)
+
+    def test_cash_sale_never_creates_wallet_transaction(self):
+        self._auth(self.staff_a)
+        self._sell('CASH', user=self.student_user)
+        self.assertFalse(Transaction.objects.filter(wallet=self.wallet).exists())
+
