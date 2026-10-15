@@ -353,3 +353,54 @@ def test_redirect_without_target_returns_400(anonymous_client):
     response = anonymous_client.get(REDIRECT_URL)
 
     assert response.status_code == 400
+
+# --- RechargeGatewayView ----------------------------------------------------
+
+GATEWAY_URL = '/api/wallet/recharge/gateway/'
+
+
+@pytest.mark.parametrize('amount, expected', [
+    ('1.00', 'payphone'),
+    ('4.99', 'payphone'),
+    ('5.00', 'kushki'),   # the threshold itself goes to Kushki
+    ('50.00', 'kushki'),
+])
+def test_gateway_endpoint_routes_by_amount(parent_client, amount, expected):
+    response = parent_client.get(GATEWAY_URL, {'amount': amount})
+
+    assert response.status_code == 200
+    assert response.data == {'gateway': expected}
+
+
+def test_gateway_endpoint_follows_configured_threshold(parent_client, settings):
+    settings.WALLET_RECHARGE_GATEWAY_THRESHOLD = 20.00
+
+    assert parent_client.get(GATEWAY_URL, {'amount': '10.00'}).data == {'gateway': 'payphone'}
+    assert parent_client.get(GATEWAY_URL, {'amount': '20.00'}).data == {'gateway': 'kushki'}
+
+
+@pytest.mark.parametrize('amount', [None, 'abc', '0', '-3', '0.50'])
+def test_gateway_endpoint_rejects_invalid_or_below_minimum(parent_client, amount):
+    params = {} if amount is None else {'amount': amount}
+
+    assert parent_client.get(GATEWAY_URL, params).status_code == 400
+
+
+def test_gateway_endpoint_minimum_is_configurable(parent_client, settings):
+    settings.WALLET_RECHARGE_MIN_AMOUNT = 0.25
+
+    assert parent_client.get(GATEWAY_URL, {'amount': '0.50'}).status_code == 200
+
+
+def test_gateway_endpoint_requires_a_parent(anonymous_client, student_client):
+    assert anonymous_client.get(GATEWAY_URL, {'amount': '5.00'}).status_code in (401, 403)
+    assert student_client.get(GATEWAY_URL, {'amount': '5.00'}).status_code == 403
+
+
+def test_recharge_rejects_amount_below_minimum(parent_client, wallet, mock_celery_delay):
+    response = parent_client.post(
+        RECHARGE_URL, {'wallet_id': wallet.id, 'amount': '0.50'}, format='json'
+    )
+
+    assert response.status_code == 400
+    assert 'amount' in response.data

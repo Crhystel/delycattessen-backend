@@ -12,8 +12,10 @@ from rest_framework.views import APIView
 
 from .models import Transaction, Wallet
 from .permissions import IsWalletOwnerParent
-from .serializers import RechargeRequestSerializer, TransactionSerializer
-from .services import GatewayError, PayphonePreparer
+from users.permissions import IsParentUser
+
+from .serializers import RechargeGatewayQuerySerializer, RechargeRequestSerializer, TransactionSerializer
+from .services import GatewayError, GatewayRouter, PayphonePreparer
 from .tasks import process_recharge_task, send_recharge_confirmation_email
 
 
@@ -62,6 +64,20 @@ class PayphoneRedirectView(APIView):
         return response
 
 
+class RechargeGatewayView(APIView):
+    """GET /api/wallet/recharge/gateway/?amount=<amount>
+    Tells the app which gateway handles that amount, so the routing rule lives
+    only on the server (same GatewayRouter the recharge itself uses)."""
+
+    permission_classes = [IsAuthenticated, IsParentUser]
+
+    def get(self, request):
+        serializer = RechargeGatewayQuerySerializer(data=request.query_params)
+        serializer.is_valid(raise_exception=True)
+        gateway = GatewayRouter().get_gateway(serializer.validated_data['amount'])
+        return Response({'gateway': gateway.gateway_code})
+
+
 class WalletRechargeView(APIView):
     """POST /api/wallet/recharge/
     Amount >= threshold -> Kushki, tokenized on the frontend, processed
@@ -83,8 +99,8 @@ class WalletRechargeView(APIView):
         document_number = serializer.validated_data.get('document_number')
         phone_number = serializer.validated_data.get('phone_number')
 
-        is_payphone_range = amount < settings.WALLET_RECHARGE_GATEWAY_THRESHOLD
-        if is_payphone_range:
+        gateway = GatewayRouter().get_gateway(amount)
+        if gateway.gateway_code == Transaction.Gateway.PAYPHONE:
             try:
                 result = PayphonePreparer().prepare(wallet, amount)
             except GatewayError as exc:

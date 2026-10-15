@@ -1,10 +1,26 @@
 from decimal import Decimal
 
+from django.conf import settings
 from rest_framework import serializers
 
 from delycattessen_backend.serializer_mixins import LineSummaryMixin
 
 from .models import Transaction, Wallet
+
+
+def validate_recharge_amount(value):
+    """Single place that enforces the minimum recharge amount."""
+    minimum = Decimal(str(settings.WALLET_RECHARGE_MIN_AMOUNT))
+    if value < minimum:
+        raise serializers.ValidationError(f'El monto mínimo de recarga es ${minimum:.2f}.')
+    return value
+
+
+class RechargeGatewayQuerySerializer(serializers.Serializer):
+    amount = serializers.DecimalField(max_digits=8, decimal_places=2, min_value=Decimal('0.01'))
+
+    def validate_amount(self, value):
+        return validate_recharge_amount(value)
 
 
 class RechargeRequestSerializer(serializers.Serializer):
@@ -14,6 +30,9 @@ class RechargeRequestSerializer(serializers.Serializer):
     document_type = serializers.CharField(required=False, allow_blank=True)
     document_number = serializers.CharField(required=False, allow_blank=True)
     phone_number = serializers.CharField(required=False, allow_blank=True)
+
+    def validate_amount(self, value):
+        return validate_recharge_amount(value)
 
     def validate_wallet_id(self, value):
         if not Wallet.objects.filter(pk=value).exists():
