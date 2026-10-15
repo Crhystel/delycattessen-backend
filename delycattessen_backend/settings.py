@@ -212,6 +212,9 @@ PAYPHONE_ALLOWED_REDIRECT_HOSTS = [
 
 # Dedicated AES seed for facial embeddings (falls back to SECRET_KEY when empty).
 BIOMETRIC_ENCRYPTION_KEY = config('BIOMETRIC_ENCRYPTION_KEY', default='')
+# Minimum cosine-similarity gap between the two best face matches; below it the
+# POS refuses to pick one (two people with almost the same face vector).
+BIOMETRIC_AMBIGUITY_MARGIN = config('BIOMETRIC_AMBIGUITY_MARGIN', default=0.02, cast=float)
 
 # Shared cache (password-reset codes, QR nonces). Without REDIS_URL Django keeps
 # its default per-process memory cache.

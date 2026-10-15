@@ -83,12 +83,20 @@ import threading
 from typing import TYPE_CHECKING
 from django.conf import settings
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from rest_framework.exceptions import ValidationError
+from rest_framework import status
+from rest_framework.exceptions import APIException, ValidationError
 
 if TYPE_CHECKING:
     import numpy as np  # type hints only; imported lazily at runtime
 
 logger = logging.getLogger(__name__)
+
+
+class FaceAlreadyRegistered(APIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = _('Este rostro ya está registrado en otra persona de la institución.')
+    default_code = 'face_already_registered'
+
 
 YUNET_URL = 'https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx'
 SFACE_URL = 'https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx'
@@ -234,21 +242,20 @@ class BiometricValidationMixin:
             return 0.0
         return float(np.dot(vector_a.flatten(), vector_b.flatten()) / (norm_a * norm_b))
 
-    def match_face(
+    def _score_candidates(
         self,
         candidate_embedding: np.ndarray,
         institution=None,
-        threshold: float = 0.40,
         all_institutions: bool = False,
+        exclude_user=None,
     ):
         """
-        Matches a candidate embedding against active registered biometric embeddings in memory.
-        Only students (user__student_profile__institution) and teachers (user__institution)
-        have biometrics, and they are filtered strictly by `institution` (RNF-04).
-        Matching across every institution requires the explicit all_institutions=True
-        (admin consolidated view); a missing institution never widens the search.
-        Performs vectorized cosine comparison with NumPy.
-        Returns (matched_user, similarity_score) or (None, -1.0).
+        Cosine similarity between the candidate and every active biometric of
+        students (user__student_profile__institution) and teachers
+        (user__institution) of `institution` (RNF-04). Searching every
+        institution requires the explicit all_institutions=True (admin
+        consolidated view); a missing institution never widens the search.
+        Returns (users, similarities) with users ordered by biometric id.
         """
         import numpy as np
         from django.db.models import Q
@@ -260,11 +267,13 @@ class BiometricValidationMixin:
         qs = UserBiometric.objects.filter(
             is_active=True,
             user__role__in=[CustomUser.Role.STUDENT, CustomUser.Role.TEACHER],
-        )
+        ).order_by('id')
         if institution is not None:
             qs = qs.filter(
                 Q(user__student_profile__institution=institution) | Q(user__institution=institution)
             )
+        if exclude_user is not None:
+            qs = qs.exclude(user=exclude_user)
 
         biometrics = list(
             qs.select_related('user').only(
@@ -292,24 +301,66 @@ class BiometricValidationMixin:
                 logger.warning("[BIOMETRIC] Decrypt error for user %s: %s", bio.user_id, e)
                 continue
 
-        best_user = None
-        best_score = -1.0
+        if not stored_vectors:
+            return [], np.array([], dtype=np.float32)
 
-        if stored_vectors:
-            matrix = np.array(stored_vectors, dtype=np.float32)  # shape (N, 128)
-            cand = candidate_embedding.flatten().astype(np.float32)
-            cand_norm = np.linalg.norm(cand)
-            matrix_norms = np.linalg.norm(matrix, axis=1)
-            denom = matrix_norms * cand_norm
-            denom = np.where(denom == 0, 1e-9, denom)
-            similarities = np.dot(matrix, cand) / denom
+        matrix = np.array(stored_vectors, dtype=np.float32)  # shape (N, 128)
+        cand = candidate_embedding.flatten().astype(np.float32)
+        denom = np.linalg.norm(matrix, axis=1) * np.linalg.norm(cand)
+        denom = np.where(denom == 0, 1e-9, denom)
+        return valid_users, np.dot(matrix, cand) / denom
 
-            best_idx = int(np.argmax(similarities))
-            score = float(similarities[best_idx])
-            best_score = score
-            if score >= threshold:
-                best_user = valid_users[best_idx]
+    def match_face(
+        self,
+        candidate_embedding: np.ndarray,
+        institution=None,
+        threshold: float = 0.40,
+        all_institutions: bool = False,
+    ):
+        """
+        Matches a candidate embedding against the registered biometrics of the
+        institution (see _score_candidates).
+        If the two best matches differ by less than BIOMETRIC_AMBIGUITY_MARGIN
+        the face is ambiguous (two people share almost the same vector), so
+        nobody is returned and the POS falls back to the QR code.
+        Returns (matched_user, similarity_score) or (None, best_score / -1.0).
+        """
+        from django.conf import settings
 
-        logger.debug("[BIOMETRIC] Face match evaluation completed: match_found=%s", best_user is not None)
-        return best_user, best_score
+        users, similarities = self._score_candidates(
+            candidate_embedding, institution=institution, all_institutions=all_institutions,
+        )
+        if not users:
+            return None, -1.0
+
+        order = similarities.argsort()[::-1]
+        best_idx = int(order[0])
+        best_score = float(similarities[best_idx])
+        if best_score < threshold:
+            return None, best_score
+
+        if len(order) > 1:
+            runner_up = float(similarities[int(order[1])])
+            if runner_up >= threshold and best_score - runner_up < settings.BIOMETRIC_AMBIGUITY_MARGIN:
+                logger.warning("[BIOMETRIC] Ambiguous face match between users %s and %s",
+                               users[best_idx].id, users[int(order[1])].id)
+                return None, best_score
+
+        logger.debug("[BIOMETRIC] Face match evaluation completed: match_found=True")
+        return users[best_idx], best_score
+
+    def ensure_face_not_registered(
+        self, vector: np.ndarray, institution, exclude_user=None, threshold: float = 0.40,
+    ) -> None:
+        """
+        Raises FaceAlreadyRegistered (409) if this face already belongs to
+        another student or teacher of the institution. Uses the same threshold
+        the POS uses to recognize people, so a face accepted here can be told
+        apart there. `exclude_user` is the owner (changing their own photo).
+        """
+        _, similarities = self._score_candidates(
+            vector, institution=institution, exclude_user=exclude_user,
+        )
+        if len(similarities) and float(similarities.max()) >= threshold:
+            raise FaceAlreadyRegistered()
 

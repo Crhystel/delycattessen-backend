@@ -231,8 +231,22 @@ class StudentRegistrationSerializer(UppercaseNamesMixin,serializers.Serializer):
         return attrs
 
     def create(self, validated_data):
+        from pos.mixins import BiometricValidationMixin
         parent_profile = self.context['parent_profile']
         institution = validated_data['institution']
+
+        # Extract the face first: a face already registered to someone else of
+        # the institution rejects the registration (409) before anything is created.
+        vector = None
+        photo = validated_data['profile_picture']
+        mixin = BiometricValidationMixin()
+        try:
+            photo.seek(0)
+            vector = mixin.extract_face_embedding(photo)
+        except Exception as e:
+            logger.warning("[BIOMETRIC] Error al extraer embedding facial en registro: %s", str(e))
+        if vector is not None:
+            mixin.ensure_face_not_registered(vector, institution)
 
         student_user = CustomUser(
             username=validated_data['username'],
@@ -248,16 +262,6 @@ class StudentRegistrationSerializer(UppercaseNamesMixin,serializers.Serializer):
 
         # Automatic biometric facial vector registration from ORIGINAL profile picture
         biometric_registered = False
-        vector = None
-        photo = validated_data['profile_picture']
-        try:
-            from pos.mixins import BiometricValidationMixin
-            mixin = BiometricValidationMixin()
-            photo.seek(0)
-            vector = mixin.extract_face_embedding(photo)
-        except Exception as e:
-            logger.warning("[BIOMETRIC] Error al extraer embedding facial en registro: %s", str(e))
-
         photo.seek(0)
         student_profile = StudentProfile.objects.create(
             user=student_user,
@@ -268,9 +272,7 @@ class StudentRegistrationSerializer(UppercaseNamesMixin,serializers.Serializer):
 
         if vector is not None:
             try:
-                from pos.mixins import BiometricValidationMixin
                 from users.models import UserBiometric
-                mixin = BiometricValidationMixin()
                 ciphertext, nonce, tag = mixin.encrypt_embedding(vector)
                 UserBiometric.objects.update_or_create(
                     user=student_user,

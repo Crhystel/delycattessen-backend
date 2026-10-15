@@ -7,6 +7,8 @@ logger = logging.getLogger(__name__)
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.views import APIView
+from rest_framework.exceptions import ValidationError as DRFValidationError
+from django.db import transaction
 from rest_framework.viewsets import ModelViewSet
 from django.contrib.auth import get_user_model
 from django.utils.translation import gettext_lazy as _
@@ -25,7 +27,7 @@ from .serializers import (
     VerifyPaymentPinSerializer,
     ChangePasswordSerializer,
 )
-from .permissions import IsAdministrator, IsParentUser, SameInstitutionPermission, CanRequestPasswordReset, CanManageAllergies, IsParentOfStudent, CanRegisterBiometric
+from .permissions import IsAdministrator, IsParentUser, SameInstitutionPermission, CanRequestPasswordReset, CanManageAllergies, IsParentOfStudent, CanRegisterBiometric, get_object_institution_id
 from rest_framework.permissions import SAFE_METHODS
 from .mixins import InstitutionScopeMixin, TokenGeneratorMixin, resolve_write_institution
 from .models import CustomUser, Institution, StudentProfile
@@ -175,15 +177,23 @@ class ChildPhotoUpdateView(APIView):
 
         photo = request.FILES['profile_picture']
 
-        # Extract facial embedding with ORIGINAL photo before resizing/saving
-        biometric_registered = False
+        # The new face must be valid and unique BEFORE anything is saved, so the
+        # photo and the embedding used by the POS never get out of sync.
+        mixin = BiometricValidationMixin()
         try:
-            from pos.mixins import BiometricValidationMixin
-            from users.models import UserBiometric
-            mixin = BiometricValidationMixin()
             photo.seek(0)
             vector = mixin.extract_face_embedding(photo)
             ciphertext, nonce, tag = mixin.encrypt_embedding(vector)
+        except DRFValidationError:
+            raise
+        except Exception:
+            logger.exception("[BIOMETRIC] Error al procesar la foto del estudiante %s", student_id)
+            raise DRFValidationError(_('No se pudo procesar la fotografía para el reconocimiento facial.'))
+        mixin.ensure_face_not_registered(
+            vector, student_profile.institution, exclude_user=student_profile.user,
+        )
+
+        with transaction.atomic():
             UserBiometric.objects.update_or_create(
                 user=student_profile.user,
                 defaults={
@@ -193,16 +203,12 @@ class ChildPhotoUpdateView(APIView):
                     'is_active': True,
                 }
             )
-            biometric_registered = True
-        except Exception as e:
-            logger.warning("[BIOMETRIC] Error al actualizar embedding facial de estudiante: %s", str(e))
-
-        photo.seek(0)
-        student_profile.profile_picture = photo
-        student_profile.save()
+            photo.seek(0)
+            student_profile.profile_picture = photo
+            student_profile.save()
 
         data = ChildSerializer(student_profile).data
-        data['biometric_registered'] = biometric_registered
+        data['biometric_registered'] = True
         return Response(data, status=status.HTTP_200_OK)
     
 class AllergenListView(generics.ListAPIView):
@@ -371,6 +377,11 @@ class RegisterBiometricView(BiometricValidationMixin, APIView):
 
         # 2. Encrypt vector with AES-256-GCM
         ciphertext, nonce, tag = self.encrypt_embedding(vector)
+
+        # The same face cannot belong to two people of the institution
+        self.ensure_face_not_registered(
+            vector, get_object_institution_id(target_user), exclude_user=target_user,
+        )
 
         # 3. Store only encrypted vector, nonce, tag
         UserBiometric.objects.update_or_create(
