@@ -1,6 +1,9 @@
+import zoneinfo
+from datetime import datetime
 from decimal import Decimal
 
 from django.db import transaction
+from django.db.models import Sum
 from django.utils.translation import gettext_lazy as _
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
@@ -159,3 +162,22 @@ PROCESSORS = {
 
 def process_sale(payment_method, institution, cashier, customer, lines):
     return PROCESSORS[payment_method](institution, cashier, customer).process(lines)
+
+
+LOCAL_TIMEZONE = zoneinfo.ZoneInfo('America/Guayaquil')
+
+
+def month_start_local(now=None):
+    """First instant of the current month in the institution's timezone."""
+    now = now or datetime.now(LOCAL_TIMEZONE)
+    return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
+def monthly_credit_total(customer):
+    """What a teacher has accumulated on institutional credit this month."""
+    total = Sale.objects.filter(
+        customer=customer,
+        payment_method=Sale.PaymentMethod.CREDIT,
+        created_at__gte=month_start_local(),
+    ).aggregate(total=Sum('total_amount'))['total']
+    return total or Decimal('0.00')

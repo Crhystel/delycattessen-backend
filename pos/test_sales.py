@@ -259,3 +259,26 @@ class SaleTests(APITestCase):
         for user in (self.staff_a, self.parent_user, self.student_user):
             self._auth(user)
             self.assertEqual(self.client.get('/api/pos/credit/history/').status_code, 403)
+
+    # ---- identified user payload ------------------------------------------------
+    def test_identified_teacher_shows_spanish_role_and_month_credit(self):
+        from pos.views import _build_identified_user_payload
+
+        self._auth(self.staff_a)
+        self._sell('CREDIT', user=self.teacher_a)  # default sale: 2 x 2.50
+        self._sell('CASH', user=self.teacher_a)  # cash does not count as credit
+        old = Sale.objects.create(
+            institution=self.inst_a, cashier=self.staff_a, customer=self.teacher_a,
+            payment_method=Sale.PaymentMethod.CREDIT, total_amount=Decimal('9.00'))
+        Sale.objects.filter(pk=old.pk).update(created_at=datetime.now(zoneinfo.ZoneInfo('UTC')) - timedelta(days=62))
+
+        payload = _build_identified_user_payload(self.teacher_a, 'QR_CODE')
+        self.assertEqual(payload['role_display'], 'Docente')
+        self.assertEqual(payload['credit_accumulated'], '5.00')
+
+    def test_identified_student_has_spanish_role_and_no_credit(self):
+        from pos.views import _build_identified_user_payload
+
+        payload = _build_identified_user_payload(self.student_user, 'QR_CODE')
+        self.assertEqual(payload['role_display'], 'Estudiante')
+        self.assertIsNone(payload['credit_accumulated'])

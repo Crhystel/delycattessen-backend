@@ -4,12 +4,11 @@ from datetime import datetime
 from rest_framework import generics, status
 from rest_framework.response import Response
 from django.db import transaction
-from django.db.models import Sum
 from rest_framework.permissions import IsAuthenticated
 from django.utils.translation import gettext_lazy as _
 from .serializers import PreOrderCreateSerializer, PreOrderListSerializer, SaleCreateSerializer, SaleSerializer
 from .models import PreOrder, PreOrderItem, Sale
-from .services import process_sale
+from .services import LOCAL_TIMEZONE, monthly_credit_total, process_sale
 from .mixins import AllergenValidatorMixin, ParentalControlValidatorMixin
 from users.permissions import IsParentUser
 from users.models import StudentProfile
@@ -212,14 +211,21 @@ def _build_identified_user_payload(user: CustomUser, method: str) -> dict:
     if not full_name:
         full_name = user.username
 
+    # Teachers do not use a wallet: the cashier sees what they owe on credit.
+    credit_accumulated = None
+    if user.role == CustomUser.Role.TEACHER:
+        credit_accumulated = str(monthly_credit_total(user))
+
     return {
         "user_id": user.id,
         "student_id": student_id,
         "username": user.username,
         "full_name": full_name,
         "role": user.role,
+        "role_display": user.get_role_display(),
         "institution": institution.name if institution else None,
         "balance": balance,
+        "credit_accumulated": credit_accumulated,
         "allergies": sorted(set(allergies)),
         "pending_orders": pending_orders,
         "identification_method": method,
@@ -425,15 +431,11 @@ class CreditHistoryView(APIView):
     max_results = 200
 
     def get(self, request):
-        now_ec = datetime.now(zoneinfo.ZoneInfo('America/Guayaquil'))
-        month_start = now_ec.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         sales = Sale.objects.filter(
             customer=request.user, payment_method=Sale.PaymentMethod.CREDIT,
         ).prefetch_related('items__menu_item')
-        accumulated = sales.filter(created_at__gte=month_start).aggregate(
-            total=Sum('total_amount'))['total'] or Decimal('0.00')
         return Response({
-            'month': now_ec.strftime('%Y-%m'),
-            'accumulated_total': str(accumulated),
+            'month': datetime.now(LOCAL_TIMEZONE).strftime('%Y-%m'),
+            'accumulated_total': str(monthly_credit_total(request.user)),
             'results': SaleSerializer(sales[:self.max_results], many=True).data,
         })
