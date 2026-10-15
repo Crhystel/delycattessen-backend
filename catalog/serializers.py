@@ -69,12 +69,14 @@ class MenuItemSerializer(IngredientValidationMixin, AllergenSyncMixin, serialize
 
     is_active = serializers.BooleanField(default=True, required=False)
     is_visible = serializers.BooleanField(default=True, required=False)
+    institution_name = serializers.CharField(source='institution.name', read_only=True)
 
     class Meta:
         model = MenuItem
         fields = [
             'id', 'name', 'description', 'category', 'image', 'price',
             'is_active', 'is_visible', 'stock', 'ingredients', 'allergens',
+            'institution_name',
         ]
         read_only_fields = ['allergens']
 
@@ -95,12 +97,13 @@ class MenuDishSerializer(IngredientValidationMixin, AllergenSyncMixin, serialize
     """
     is_active = serializers.BooleanField(default=True, required=False)
     price = serializers.DecimalField(max_digits=6, decimal_places=2, min_value=Decimal('0.01'))
+    institution_name = serializers.CharField(source='institution.name', read_only=True)
 
     class Meta:
         model = MenuDish
         fields = [
             'id', 'name', 'description', 'price', 'image',
-            'ingredients', 'allergens', 'is_active',
+            'ingredients', 'allergens', 'is_active', 'institution_name',
         ]
         read_only_fields = ['allergens']
 
@@ -157,12 +160,13 @@ class MonthlyMenuSerializer(serializers.ModelSerializer):
     status_display = serializers.CharField(source='get_status_display', read_only=True)
     days = DailyMenuSerializer(many=True, read_only=True)
     total_preorders = serializers.SerializerMethodField()
+    institution_name = serializers.CharField(source='institution.name', read_only=True)
 
     class Meta:
         model = MonthlyMenu
         fields = [
             'id', 'year', 'month', 'status', 'status_display',
-            'published_at', 'days', 'total_preorders',
+            'published_at', 'days', 'total_preorders', 'institution_name',
         ]
 
     def get_total_preorders(self, obj) -> int:
