@@ -42,6 +42,10 @@ class CustomUser(AbstractUser):
         default=False,
         help_text=_('Verdadero para cuentas creadas por el Administrador (Docente/Personal Operativo)')
     )
+    allergies = models.ManyToManyField(
+        'catalog.Allergen', verbose_name=_('allergies'), blank=True, related_name='teachers',
+        help_text=_('Aplica únicamente a Docentes')
+    )
     EMAIL_FIELD = 'email'
 
     def __str__(self) -> str:

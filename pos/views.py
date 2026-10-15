@@ -4,9 +4,12 @@ from datetime import datetime
 from rest_framework import generics, status
 from rest_framework.response import Response
 from django.db import transaction
+from django.db.models import Sum
+from rest_framework.permissions import IsAuthenticated
 from django.utils.translation import gettext_lazy as _
-from .serializers import PreOrderCreateSerializer, PreOrderListSerializer
-from .models import PreOrder, PreOrderItem
+from .serializers import PreOrderCreateSerializer, PreOrderListSerializer, SaleCreateSerializer, SaleSerializer
+from .models import PreOrder, PreOrderItem, Sale
+from .services import process_sale
 from .mixins import AllergenValidatorMixin, ParentalControlValidatorMixin
 from users.permissions import IsParentUser
 from users.models import StudentProfile
@@ -155,15 +158,15 @@ from django.conf import settings
 from django.core.cache import cache
 from rest_framework.views import APIView
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
-from users.permissions import IsOperativeUser, SameInstitutionAsTarget
-from users.mixins import resolve_institution_scope
+from users.permissions import IsOperativeUser, IsTeacherUser, SameInstitutionAsTarget
+from users.mixins import resolve_institution_scope, resolve_write_institution
 from users.models import CustomUser
 from .mixins import BiometricValidationMixin
 
 def _build_identified_user_payload(user: CustomUser, method: str) -> dict:
     """Constructs the standard user summary response for POS checkout."""
     balance = "0.00"
-    allergies = []
+    allergies = [a.name for a in user.allergies.all()]
     student_id = None
     institution = user.institution  # default: staff/teacher institution
     pending_orders = []
@@ -382,3 +385,55 @@ class PreOrderDeliverView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+class SaleCreateView(APIView):
+    """
+    POST /api/pos/sales/
+    Charges products of the operator's institution. Without user_id it is a
+    quick sale (cash only); with user_id the payment method decides who can pay.
+    """
+    permission_classes = [IsOperativeUser]
+
+    def post(self, request):
+        serializer = SaleCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        customer = None
+        if 'user_id' in data:
+            customer = get_object_or_404(
+                CustomUser.objects.select_related('student_profile'), pk=data['user_id'],
+            )
+
+        sale = process_sale(
+            data['payment_method'],
+            resolve_write_institution(request),
+            request.user,
+            customer,
+            [(item['menu_item_id'], item['quantity']) for item in data['items']],
+        )
+        return Response(SaleSerializer(sale).data, status=status.HTTP_201_CREATED)
+
+
+class CreditHistoryView(APIView):
+    """
+    GET /api/pos/credit/history/
+    Credit purchases of the authenticated teacher and what has accumulated
+    since the first day of the current month (America/Guayaquil).
+    """
+    permission_classes = [IsAuthenticated, IsTeacherUser]
+    max_results = 200
+
+    def get(self, request):
+        now_ec = datetime.now(zoneinfo.ZoneInfo('America/Guayaquil'))
+        month_start = now_ec.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        sales = Sale.objects.filter(
+            customer=request.user, payment_method=Sale.PaymentMethod.CREDIT,
+        ).prefetch_related('items__menu_item')
+        accumulated = sales.filter(created_at__gte=month_start).aggregate(
+            total=Sum('total_amount'))['total'] or Decimal('0.00')
+        return Response({
+            'month': now_ec.strftime('%Y-%m'),
+            'accumulated_total': str(accumulated),
+            'results': SaleSerializer(sales[:self.max_results], many=True).data,
+        })

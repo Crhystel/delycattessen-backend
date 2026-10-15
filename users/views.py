@@ -27,7 +27,7 @@ from .serializers import (
     VerifyPaymentPinSerializer,
     ChangePasswordSerializer,
 )
-from .permissions import IsAdministrator, IsParentUser, SameInstitutionPermission, CanRequestPasswordReset, CanManageAllergies, IsParentOfStudent, CanRegisterBiometric, get_object_institution_id
+from .permissions import IsAdministrator, IsParentUser, SameInstitutionPermission, CanRequestPasswordReset, CanManageAllergies, IsParentOfStudent, CanRegisterBiometric, IsTeacherUser, get_object_institution_id
 from rest_framework.permissions import SAFE_METHODS
 from .mixins import InstitutionScopeMixin, TokenGeneratorMixin, resolve_write_institution
 from .models import CustomUser, Institution, StudentProfile
@@ -217,29 +217,58 @@ class AllergenListView(generics.ListAPIView):
     serializer_class = AllergenSerializer
     permission_classes = [IsAuthenticated]
        
-class StudentAllergyView(APIView):
+class BaseAllergyView(APIView):
+    """
+    Template Method: reads and replaces the allergies of an owner (a student
+    profile or a teacher). Subclasses only decide who the owner is.
+    """
+
+    def get_owner(self, request, **kwargs):
+        raise NotImplementedError
+
+    def get(self, request, **kwargs):
+        owner = self.get_owner(request, **kwargs)
+        return Response(AllergenSerializer(owner.allergies.all(), many=True).data)
+
+    def put(self, request, **kwargs):
+        owner = self.get_owner(request, **kwargs)
+        allergen_ids = request.data.get('allergen_ids', [])
+        try:
+            allergens = list(Allergen.objects.filter(pk__in=allergen_ids))
+        except (TypeError, ValueError):
+            allergens = []
+        if len(allergens) != len(set(allergen_ids)):
+            raise DRFValidationError({'allergen_ids': _('Uno o más alérgenos no existen.')})
+        owner.allergies.set(allergens)
+
+        # An allergen with no MenuItem tagged can't be blocked by the POS yet,
+        # so the owner gets a heads-up instead of a false sense of protection.
+        unprotected = [a.name for a in allergens if not a.menu_items.exists()]
+
+        return Response({
+            'allergies': AllergenSerializer(allergens, many=True).data,
+            'unprotected_allergens': unprotected,
+        })
+
+
+class StudentAllergyView(BaseAllergyView):
     """GET/PUT /api/users/students/<student_id>/allergies/"""
 
     permission_classes = [IsAuthenticated, IsParentOfStudent]
 
-    def get(self, request, student_id):
-        student = get_object_or_404(StudentProfile, pk=student_id)
-        return Response(AllergenSerializer(student.allergies.all(), many=True).data)
+    def get_owner(self, request, student_id):
+        return get_object_or_404(StudentProfile, pk=student_id)
 
-    def put(self, request, student_id):
-        student = get_object_or_404(StudentProfile, pk=student_id)
-        allergen_ids = request.data.get('allergen_ids', [])
-        student.allergies.set(allergen_ids)
 
-        allergies = student.allergies.all()
-        # An allergen with no MenuItem tagged can't be blocked by the POS yet,
-        # so the parent gets a heads-up instead of a false sense of protection.
-        unprotected = [a.name for a in allergies if not a.menu_items.exists()]
+class TeacherAllergyView(BaseAllergyView):
+    """GET/PUT /api/users/allergies/ - the authenticated teacher's own allergies"""
 
-        return Response({
-            'allergies': AllergenSerializer(allergies, many=True).data,
-            'unprotected_allergens': unprotected,
-        })
+    permission_classes = [IsAuthenticated, IsTeacherUser]
+
+    def get_owner(self, request):
+        return request.user
+
+
 class SetPaymentPinView(APIView):
     """POST /api/users/set-payment-pin/ — the dad creates or changes his PIN"""
 

@@ -92,6 +92,18 @@ class IsParentUser(BasePermission):
         return bool( request.user and request.user.is_authenticated and request.user.role == CustomUser.Role.PARENT
         )
 
+class IsTeacherUser(BasePermission):
+    """Only CustomUser with role TEACHER can access the endpoint."""
+    message = _('Solo un docente puede realizar esta acción.')
+
+    def has_permission(self, request, view):
+        return bool(
+            request.user
+            and request.user.is_authenticated
+            and request.user.role == CustomUser.Role.TEACHER
+        )
+
+
 class CanManageAllergies(BasePermission):
     """A teacher can only manage their own allergies. A parent can only
     manage the allergies of their own children."""
@@ -148,4 +160,4 @@ class IsStudentOrTeacherUser(BasePermission):
             request.user
             and request.user.is_authenticated
             and request.user.role in [CustomUser.Role.STUDENT, CustomUser.Role.TEACHER]
-        )
+        )

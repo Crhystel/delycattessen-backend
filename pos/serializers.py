@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import PreOrder, PreOrderItem
+from .models import PreOrder, PreOrderItem, Sale, SaleItem
 
 
 class PreOrderItemDetailSerializer(serializers.ModelSerializer):
@@ -38,3 +38,30 @@ class PreOrderListSerializer(serializers.ModelSerializer):
         user = obj.student.user
         full_name = f"{user.first_name} {user.last_name}".strip()
         return full_name or user.username
+
+
+class SaleItemInputSerializer(serializers.Serializer):
+    menu_item_id = serializers.IntegerField()
+    quantity = serializers.IntegerField(min_value=1)
+
+
+class SaleCreateSerializer(serializers.Serializer):
+    payment_method = serializers.ChoiceField(choices=Sale.PaymentMethod.choices)
+    user_id = serializers.IntegerField(required=False)
+    items = SaleItemInputSerializer(many=True, allow_empty=False)
+
+
+class SaleItemSerializer(serializers.ModelSerializer):
+    menu_item_name = serializers.CharField(source='menu_item.name', read_only=True)
+
+    class Meta:
+        model = SaleItem
+        fields = ('menu_item_name', 'quantity', 'price_at_purchase')
+
+
+class SaleSerializer(serializers.ModelSerializer):
+    items = SaleItemSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Sale
+        fields = ('id', 'payment_method', 'total_amount', 'created_at', 'items')

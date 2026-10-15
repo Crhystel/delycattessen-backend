@@ -252,7 +252,7 @@ class BiometricValidationMixin:
         """
         Cosine similarity between the candidate and every active biometric of
         students (user__student_profile__institution) and teachers
-        (user__institution) of `institution` (RNF-04). Searching every
+        (user__institution) of `institution`. Searching every
         institution requires the explicit all_institutions=True (admin
         consolidated view); a missing institution never widens the search.
         Returns (users, similarities) with users ordered by biometric id.
