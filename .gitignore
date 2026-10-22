@@ -5,6 +5,8 @@ env/
 
 .env
 .env.local
+.env.*
+!.env.example
 
 # Base de datos local
 db.sqlite3
@@ -26,11 +28,17 @@ dist/
 # Archivos estáticos generados
 staticfiles/
 media/
+models/
 
 # Configuración de editores/IDEs
 .vscode/
 .idea/
 *.swp
+
+# Configuración local de Claude Code (skills/estándares personales, no compartidos)
+.claude/
+AGENTS.md
+CLAUDE.md
 
 # Sistema operativo
 .DS_Store
@@ -41,5 +49,7 @@ Thumbs.db
 
 # Coverage / testing
 .coverage
+.coverage.*
+coverage.xml
 htmlcov/
 .pytest_cache/

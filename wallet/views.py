@@ -1,0 +1,169 @@
+import json
+from urllib.parse import urlparse
+
+import requests
+from django.conf import settings
+from django.http import HttpResponse
+from django.utils.translation import gettext_lazy as _
+from rest_framework.generics import get_object_or_404
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from .models import Transaction, Wallet
+from .permissions import HasKushkiWebhookSecret, IsWalletOwnerParent
+from users.permissions import IsParentUser
+
+from .serializers import RechargeGatewayQuerySerializer, RechargeRequestSerializer, TransactionSerializer
+from .services import GatewayError, GatewayRouter, PayphonePreparer, RechargeService
+from .tasks import send_recharge_confirmation_email
+
+
+def _is_allowed_redirect_target(url: str) -> bool:
+    """Only https URLs on the Payphone host (or explicitly allowed hosts)."""
+    parsed = urlparse(url)
+    allowed_hosts = {
+        urlparse(settings.PAYPHONE_API_URL).hostname,
+        *settings.PAYPHONE_ALLOWED_REDIRECT_HOSTS,
+    }
+    return parsed.scheme == 'https' and bool(parsed.hostname) and parsed.hostname in allowed_hosts
+
+
+class PayphoneRedirectView(APIView):
+    """Intermediate page served from OUR OWN domain (the one registered in
+    Payphone Developer). Flutter's WebView opens this URL first, not
+    Payphone's directly, so the browser generates a valid Referer before
+    jumping to Payphone's checkout."""
+
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        target_url = request.query_params.get('target')
+        if not target_url:
+            return HttpResponse('Missing target parameter.', status=400)
+        if not _is_allowed_redirect_target(target_url):
+            return HttpResponse('Invalid target parameter.', status=400)
+
+        # json.dumps yields a valid JS string literal; '<' is escaped so the
+        # value can never close the <script> tag.
+        js_target = json.dumps(target_url).replace('<', '\\u003c')
+        html = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <meta name="referrer" content="strict-origin-when-cross-origin">
+        </head>
+        <body>
+          <script>window.location.replace({js_target});</script>
+        </body>
+        </html>
+        """
+        response = HttpResponse(html)
+        response['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+        return response
+
+
+class RechargeGatewayView(APIView):
+    """GET /api/wallet/recharge/gateway/?amount=<amount>
+    Tells the app which gateway handles that amount, so the routing rule lives
+    only on the server (same GatewayRouter the recharge itself uses)."""
+
+    permission_classes = [IsAuthenticated, IsParentUser]
+
+    def get(self, request):
+        serializer = RechargeGatewayQuerySerializer(data=request.query_params)
+        serializer.is_valid(raise_exception=True)
+        gateway = GatewayRouter().get_gateway(serializer.validated_data['amount'])
+        return Response({'gateway': gateway.gateway_code})
+
+
+class WalletRechargeView(APIView):
+    """POST /api/wallet/recharge/
+    Amount >= threshold -> Kushki, tokenized on the frontend, processed
+    async via Celery (RNF-05). Amount < threshold -> Payphone: returns a
+    payment_url to open in a WebView."""
+
+    permission_classes = [IsAuthenticated, IsWalletOwnerParent]
+
+    def post(self, request):
+        serializer = RechargeRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        wallet = get_object_or_404(Wallet, pk=serializer.validated_data['wallet_id'])
+        self.check_object_permissions(request, wallet)
+
+        amount = serializer.validated_data['amount']
+        kushki_token = serializer.validated_data.get('kushki_token')
+        document_type = serializer.validated_data.get('document_type') or 'CC'
+        document_number = serializer.validated_data.get('document_number')
+        phone_number = serializer.validated_data.get('phone_number')
+
+        try:
+            body, http_status = RechargeService().start(
+                wallet, amount, kushki_token, document_type, document_number, phone_number,
+            )
+        except GatewayError as exc:
+            return Response({'detail': str(exc)}, status=400)
+        return Response(body, status=http_status)
+
+
+class PayphoneCallbackView(APIView):
+    """GET /api/wallet/payphone/callback/?id=...&clientTransactionId=..."""
+
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        payphone_id = request.query_params.get('id')
+        client_transaction_id = request.query_params.get('clientTransactionId')
+
+        if not payphone_id or not client_transaction_id:
+            return Response({'detail': 'Missing id or clientTransactionId.'}, status=400)
+        if not (payphone_id.isdigit() and client_transaction_id.isdigit()):
+            return Response({'detail': 'Invalid id or clientTransactionId.'}, status=400)
+
+        try:
+            transaction = PayphonePreparer().confirm(int(payphone_id), client_transaction_id)
+        except Transaction.DoesNotExist:
+            return Response({'detail': 'Transaction not found.'}, status=404)
+        except requests.RequestException:
+            return Response({'detail': _('Payphone no respondió correctamente.')}, status=502)
+        return Response({'status': transaction.status})
+
+
+class WalletTransactionListView(APIView):
+    """GET /api/wallet/<wallet_id>/transactions/"""
+
+    permission_classes = [IsAuthenticated, IsWalletOwnerParent]
+
+    def get(self, request, wallet_id):
+        wallet = get_object_or_404(Wallet, pk=wallet_id)
+        self.check_object_permissions(request, wallet)
+
+        transactions = wallet.transactions.select_related('pre_order', 'sale').prefetch_related(
+            'pre_order__items__dish', 'sale__items__menu_item'
+        )[:10]
+        serializer = TransactionSerializer(transactions, many=True)
+        return Response(serializer.data)
+
+
+class KushkiWebhookView(APIView):
+    """POST /api/wallet/kushki/webhook/
+    Kushki notifies transaction events here."""
+
+    permission_classes = [HasKushkiWebhookSecret]
+
+    def post(self, request):
+        ticket_number = request.data.get('ticketNumber')
+        transaction_status = request.data.get('transactionStatus')
+
+        if not ticket_number:
+            return Response({'detail': 'Missing ticketNumber.'}, status=400)
+
+        transaction = Transaction.objects.filter(external_transaction_id=ticket_number).first()
+        if transaction and transaction_status == 'APPROVED' and transaction.status != Transaction.Status.SUCCESS:
+            transaction.status = Transaction.Status.SUCCESS
+            transaction.save(update_fields=['status'])
+            send_recharge_confirmation_email.delay(transaction.id)
+
+        return Response({'received': True}, status=200)

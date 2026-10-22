@@ -1,0 +1,1 @@
+# pos management commands package

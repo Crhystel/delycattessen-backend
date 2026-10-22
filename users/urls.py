@@ -1,0 +1,49 @@
+from django.urls import path
+from rest_framework.routers import DefaultRouter
+from .views import (
+    ChangePasswordView,
+    ChildrenListView,
+    ChildPhotoUpdateView,
+    ParentRegistrationView,
+    StudentRegistrationView,
+    StaffViewSet,
+    RequestPasswordResetView,
+    ConfirmPasswordResetView,
+    InstitutionListView,
+    MeView,
+    EmailTokenObtainPairView,
+    AllergenListView,
+    StudentAllergyView,
+    TeacherAllergyView,
+    SetPaymentPinView,
+    VerifyPaymentPinView,
+    ParentalControlView,
+    DynamicQrTokenView,
+    RegisterBiometricView,
+)
+from rest_framework_simplejwt.views import TokenRefreshView
+
+router = DefaultRouter()
+router.register('staff', StaffViewSet, basename='staff')
+
+urlpatterns = [
+    path('parent-registration/', ParentRegistrationView.as_view(), name='parent_registration'),
+    path('student-registration/', StudentRegistrationView.as_view(), name='student_registration'),
+    path('password-reset/request/', RequestPasswordResetView.as_view(), name='password_reset_request'),
+    path('password-reset/confirm/', ConfirmPasswordResetView.as_view(), name='password_reset_confirm'),
+    path('institutions/', InstitutionListView.as_view(), name='institution_list'),
+    path('me/', MeView.as_view(), name='me'),
+    path('login/', EmailTokenObtainPairView.as_view(), name='login'),
+    path('login/refresh/', TokenRefreshView.as_view(), name='login_refresh'),
+    path('children/', ChildrenListView.as_view(), name='children_list'),
+    path('children/<int:student_id>/photo/', ChildPhotoUpdateView.as_view(), name='child_photo_update'),
+    path('allergens/', AllergenListView.as_view(), name='allergen_list'),
+    path('allergies/', TeacherAllergyView.as_view(), name='teacher_allergies'),
+    path('students/<int:student_id>/allergies/', StudentAllergyView.as_view(), name='student_allergies'),
+    path('students/<int:student_id>/parental-control/', ParentalControlView.as_view(), name='student_parental_control'),
+    path('set-payment-pin/', SetPaymentPinView.as_view(), name='set_payment_pin'),
+    path('verify-payment-pin/', VerifyPaymentPinView.as_view(), name='verify_payment_pin'),
+    path('qr/token/', DynamicQrTokenView.as_view(), name='user_qr_token'),
+    path('biometrics/register/', RegisterBiometricView.as_view(), name='user_biometrics_register'),
+    path('change-password/', ChangePasswordView.as_view(), name='change_password'),
+] + router.urls

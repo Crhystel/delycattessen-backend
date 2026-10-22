@@ -1,0 +1,13 @@
+[run]
+source =
+    users
+    catalog
+    wallet
+    pos
+    core
+omit =
+    */migrations/*
+    */tests/*
+    */tests.py
+    */test_*.py
+    */conftest.py

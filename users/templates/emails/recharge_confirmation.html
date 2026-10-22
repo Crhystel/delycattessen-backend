@@ -1,0 +1,287 @@
+{% load i18n %}
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body
+    style="
+      margin: 0;
+      padding: 0;
+      background-color: #f2f7fb;
+      font-family: &quot;Nunito&quot;, Arial, sans-serif;
+    "
+  >
+    <table
+      role="presentation"
+      width="100%"
+      cellpadding="0"
+      cellspacing="0"
+      style="background-color: #f2f7fb; padding: 32px 0"
+    >
+      <tr>
+        <td align="center">
+          <table
+            role="presentation"
+            width="480"
+            cellpadding="0"
+            cellspacing="0"
+            style="
+              background-color: #ffffff;
+              border-radius: 14px;
+              overflow: hidden;
+              box-shadow: 0 2px 10px rgba(12, 27, 42, 0.06);
+            "
+          >
+            <!-- Encabezado -->
+            <tr>
+              <td
+                style="background-color: #005c99; padding: 22px 32px"
+                align="center"
+              >
+                <span
+                  style="
+                    font-family: &quot;Nunito&quot;, Arial, sans-serif;
+                    color: #f2f7fb;
+                    font-size: 19px;
+                    font-weight: 800;
+                    letter-spacing: 0.5px;
+                  "
+                >
+                  D'ELYCATTESSEN
+                </span>
+              </td>
+            </tr>
+            <tr>
+              <td style="background-color: #f5b551; height: 4px; font-size: 0">
+                &nbsp;
+              </td>
+            </tr>
+
+            <!-- Estado aprobado -->
+            <tr>
+              <td style="padding: 36px 32px 24px 32px" align="center">
+                <table role="presentation" cellpadding="0" cellspacing="0">
+                  <tr>
+                    <td
+                      style="
+                        background-color: #1e9e6b;
+                        width: 56px;
+                        height: 56px;
+                        border-radius: 50%;
+                        text-align: center;
+                        vertical-align: middle;
+                      "
+                      align="center"
+                    >
+                      <span
+                        style="
+                          color: #ffffff;
+                          font-size: 28px;
+                          font-weight: 700;
+                          line-height: 56px;
+                        "
+                        >&#10003;</span
+                      >
+                    </td>
+                  </tr>
+                </table>
+                <p
+                  style="
+                    font-size: 12px;
+                    font-weight: 700;
+                    letter-spacing: 1.5px;
+                    color: #1e9e6b;
+                    text-transform: uppercase;
+                    margin: 14px 0 2px 0;
+                  "
+                >
+                  Aprobado
+                </p>
+                <p
+                  style="
+                    font-size: 20px;
+                    font-weight: 800;
+                    color: #0c1b2a;
+                    margin: 0;
+                  "
+                >
+                  Confirmación de recarga
+                </p>
+              </td>
+            </tr>
+
+            <!-- Detalle -->
+            <tr>
+              <td style="padding: 0 32px 8px 32px">
+                <p style="font-size: 15px; color: #0c1b2a; margin: 0 0 4px 0">
+                  Hola,
+                  <strong
+                    >{{ parent_first_name }} {{ parent_last_name }}</strong
+                  >
+                </p>
+                <p
+                  style="
+                    font-size: 14px;
+                    color: #3d4e5c;
+                    line-height: 1.5;
+                    margin: 0 0 20px 0;
+                  "
+                >
+                  La recarga de saldo para <strong>{{ child_name }}</strong> ha
+                  sido aprobada.
+                </p>
+              </td>
+            </tr>
+
+            <!-- Monto destacado -->
+            <tr>
+              <td style="padding: 0 32px 24px 32px" align="center">
+                <table
+                  role="presentation"
+                  width="100%"
+                  cellpadding="0"
+                  cellspacing="0"
+                  style="background-color: #e8f6ee; border-radius: 10px"
+                >
+                  <tr>
+                    <td style="padding: 16px" align="center">
+                      <span
+                        style="
+                          font-size: 11px;
+                          color: #167a52;
+                          font-weight: 700;
+                          letter-spacing: 1px;
+                          text-transform: uppercase;
+                        "
+                        >Monto</span
+                      ><br />
+                      <span
+                        style="
+                          font-size: 28px;
+                          font-weight: 800;
+                          color: #167a52;
+                        "
+                        >${{ amount }}</span
+                      >
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
+            <!-- Datos de la transacción -->
+            <tr>
+              <td style="padding: 0 32px 32px 32px">
+                <table
+                  role="presentation"
+                  width="100%"
+                  cellpadding="0"
+                  cellspacing="0"
+                  style="border-top: 1px solid #efefef"
+                >
+                  <tr>
+                    <td
+                      style="
+                        padding: 14px 0 6px 0;
+                        font-size: 13px;
+                        color: #6b7b8a;
+                      "
+                    >
+                      Fecha
+                    </td>
+                    <td
+                      style="
+                        padding: 14px 0 6px 0;
+                        font-size: 13px;
+                        color: #0c1b2a;
+                        font-weight: 600;
+                        text-align: right;
+                      "
+                    >
+                      {{ date }}
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 6px 0; font-size: 13px; color: #6b7b8a">
+                      Referencia
+                    </td>
+                    <td
+                      style="
+                        padding: 6px 0;
+                        font-size: 13px;
+                        color: #0c1b2a;
+                        font-weight: 600;
+                        text-align: right;
+                      "
+                    >
+                      {{ reference }}
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 6px 0; font-size: 13px; color: #6b7b8a">
+                      Pasarela
+                    </td>
+                    <td
+                      style="
+                        padding: 6px 0;
+                        font-size: 13px;
+                        color: #0c1b2a;
+                        font-weight: 600;
+                        text-align: right;
+                      "
+                    >
+                      {{ gateway }}
+                    </td>
+                  </tr>
+                  <tr>
+                    <td
+                      style="
+                        padding: 6px 0 0 0;
+                        font-size: 13px;
+                        color: #6b7b8a;
+                      "
+                    >
+                      Código de autorización
+                    </td>
+                    <td
+                      style="
+                        padding: 6px 0 0 0;
+                        font-size: 13px;
+                        color: #0c1b2a;
+                        font-weight: 600;
+                        text-align: right;
+                      "
+                    >
+                      {{ ticket_number }}
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
+            <!-- Pie -->
+            <tr>
+              <td
+                style="
+                  background-color: #f2f7fb;
+                  padding: 16px 32px;
+                  text-align: center;
+                "
+              >
+                <span style="font-size: 12px; color: #6b7b8a">
+                  © {% now "Y" %} D'Elycattessen · Este es un correo automático,
+                  no responder.
+                </span>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>

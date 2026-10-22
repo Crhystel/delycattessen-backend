@@ -10,7 +10,10 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
+from datetime import timedelta
 from pathlib import Path
+
+from decouple import config
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -19,13 +22,18 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-5m_w6&i8^y3$____g41(eo8^dz&pbl+(@ki%ex3a_&*biaz!rp'
+# Required: no default, so the app refuses to start without it (set it in .env).
+SECRET_KEY = config('SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+# Secure by default: enable only through the environment (DEBUG=True in local .env).
+DEBUG = config('DEBUG', default=False, cast=bool)
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = [
+    host.strip()
+    for host in config('ALLOWED_HOSTS', default='localhost,127.0.0.1').split(',')
+    if host.strip()
+]
 
 
 # Application definition
@@ -39,15 +47,17 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework',
     'rest_framework_simplejwt',
-    'usuarios',
-    'catalogo',
-    'billetera',
-    'punto_venta',
-    'perfiles',
-    'reportes',
+    'users',
+    'catalog',
+    'wallet',
+    'pos',
+    'core',
+    'corsheaders',
+    'django_celery_results',
 ]
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -55,6 +65,12 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+]
+CORS_ALLOW_ALL_ORIGINS = config('CORS_ALLOW_ALL_ORIGINS', default=False, cast=bool)
+CORS_ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in config('CORS_ALLOWED_ORIGINS', default='').split(',')
+    if origin.strip()
 ]
 
 ROOT_URLCONF = 'delycattessen_backend.urls'
@@ -79,7 +95,6 @@ WSGI_APPLICATION = 'delycattessen_backend.wsgi.application'
 
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
-from decouple import config
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
@@ -88,6 +103,9 @@ DATABASES = {
         'PASSWORD': config('DB_PASSWORD'),
         'HOST': config('DB_HOST'),
         'PORT': config('DB_PORT'),
+        # 0 = new connection per request (current). Seconds to reuse connections otherwise.
+        'CONN_MAX_AGE': config('DB_CONN_MAX_AGE', default=0, cast=int),
+        'CONN_HEALTH_CHECKS': True,
     }
 }
 
@@ -96,27 +114,19 @@ DATABASES = {
 # https://docs.djangoproject.com/en/6.0/ref/settings/#auth-password-validators
 
 AUTH_PASSWORD_VALIDATORS = [
-    {
-        'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
-    },
-    {
-        'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
-    },
-    {
-        'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator',
-    },
-    {
-        'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
-    },
+    {'NAME': 'users.validators.PasswordPolicyValidator'},
 ]
 
 
 # Internationalization
 # https://docs.djangoproject.com/en/6.0/topics/i18n/
 
-LANGUAGE_CODE = 'en-us'
+LANGUAGE_CODE = 'es'
 
 TIME_ZONE = 'UTC'
+
+# Business time zone (cut-off dates, daily limits, receipts). Storage stays in UTC.
+LOCAL_TIME_ZONE = config('LOCAL_TIME_ZONE', default='America/Guayaquil')
 
 USE_I18N = True
 
@@ -129,16 +139,14 @@ USE_TZ = True
 STATIC_URL = 'static/'
 
 # Custom User Model
-AUTH_USER_MODEL = 'usuarios.CustomUser'
+AUTH_USER_MODEL = 'users.CustomUser'
 
 # Media files (Profile pictures, etc.)
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
-# Configuración de vigencia de token de recuperación de contraseña (15 minutos = 900 segundos)
-PASSWORD_RESET_TIMEOUT = 900
- 
-from datetime import timedelta
+# Password reset code validity in seconds (default 15 minutes)
+PASSWORD_RESET_TIMEOUT = config('PASSWORD_RESET_TIMEOUT', default=900, cast=int)
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
@@ -147,5 +155,99 @@ REST_FRAMEWORK = {
 }
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(hours=1),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=15),
 }
+AUTHENTICATION_BACKENDS = [
+    'users.backends.EmailBackend',
+    'django.contrib.auth.backends.ModelBackend',
+]
+# Celery / RabbitMQ configuration
+# Required: no default so no broker credentials live in the code.
+CELERY_BROKER_URL = config('RABBITMQ_URL')
+CELERY_RESULT_BACKEND = 'django-db'
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+# No code reads task results: skip writing one DB row per task.
+CELERY_TASK_IGNORE_RESULT = True
+# Result expiration (default 1 day = timedelta(days=1), configurable via .env in days or seconds)
+_celery_result_expires_val = config('CELERY_RESULT_EXPIRES', default=1, cast=int)
+CELERY_RESULT_EXPIRES = (
+    timedelta(days=_celery_result_expires_val)
+    if _celery_result_expires_val <= 365
+    else timedelta(seconds=_celery_result_expires_val)
+)
+# Don't hold extra messages in the worker's memory.
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+
+# Development mode (RabbitMQ 4.x fix)
+CELERY_WORKER_ENABLE_REMOTE_CONTROL = False
+CELERY_WORKER_SEND_TASK_EVENTS = False
+CELERY_WORKER_ENABLE_MINGLE = False
+CELERY_WORKER_ENABLE_GOSSIP = False
+
+# Email configuration
+EMAIL_BACKEND = config('EMAIL_BACKEND', default='django.core.mail.backends.smtp.EmailBackend')
+EMAIL_HOST = config('EMAIL_HOST', default='smtp.gmail.com')
+EMAIL_PORT = config('EMAIL_PORT', default=587, cast=int)
+EMAIL_USE_TLS = config('EMAIL_USE_TLS', default=True, cast=bool)
+EMAIL_HOST_USER = config('EMAIL_HOST_USER')
+EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD')
+DEFAULT_FROM_EMAIL = config('EMAIL_HOST_USER')
+
+
+WALLET_RECHARGE_GATEWAY_THRESHOLD = config('WALLET_RECHARGE_GATEWAY_THRESHOLD', default=5.00, cast=float)
+WALLET_RECHARGE_MIN_AMOUNT = config('WALLET_RECHARGE_MIN_AMOUNT', default=1.00, cast=float)
+# Balance below which a new wallet warns the parent.
+WALLET_LOW_BALANCE_DEFAULT = config('WALLET_LOW_BALANCE_DEFAULT', default=5.00, cast=float)
+# Seconds to wait for a payment gateway HTTP answer.
+GATEWAY_HTTP_TIMEOUT = config('GATEWAY_HTTP_TIMEOUT', default=10, cast=int)
+
+KUSHKI_PUBLIC_MERCHANT_ID = config('KUSHKI_PUBLIC_MERCHANT_ID', default='')
+KUSHKI_PRIVATE_MERCHANT_ID = config('KUSHKI_PRIVATE_MERCHANT_ID', default='')
+# Shared secret expected in the X-Webhook-Secret header of Kushki's webhook calls.
+KUSHKI_WEBHOOK_SECRET = config('KUSHKI_WEBHOOK_SECRET', default='')
+KUSHKI_API_URL = config('KUSHKI_API_URL', default='https://api-uat.kushkipagos.com')
+
+PAYPHONE_TOKEN = config('PAYPHONE_TOKEN', default='')
+PAYPHONE_STORE_ID = config('PAYPHONE_STORE_ID', default='')
+PAYPHONE_API_URL = config('PAYPHONE_API_URL', default='https://pay.payphonetodoesposible.com/api')
+PAYPHONE_RESPONSE_URL = config('PAYPHONE_RESPONSE_URL', default='')
+PAYPHONE_REDIRECT_BASE_URL = config('PAYPHONE_REDIRECT_BASE_URL', default='')
+PAYPHONE_ALLOWED_REDIRECT_HOSTS = [
+    host.strip()
+    for host in config('PAYPHONE_ALLOWED_REDIRECT_HOSTS', default='').split(',')
+    if host.strip()
+]
+
+# Dedicated AES seed for facial embeddings (falls back to SECRET_KEY when empty).
+BIOMETRIC_ENCRYPTION_KEY = config('BIOMETRIC_ENCRYPTION_KEY', default='')
+# Minimum cosine-similarity gap between the two best face matches; below it the
+# POS refuses to pick one (two people with almost the same face vector).
+BIOMETRIC_AMBIGUITY_MARGIN = config('BIOMETRIC_AMBIGUITY_MARGIN', default=0.02, cast=float)
+# Minimum cosine similarity to accept a face match.
+BIOMETRIC_MATCH_THRESHOLD = config('BIOMETRIC_MATCH_THRESHOLD', default=0.40, cast=float)
+
+# Dynamic QR: seconds a token stays valid.
+QR_TOKEN_TTL_SECONDS = config('QR_TOKEN_TTL_SECONDS', default=300, cast=int)
+# Dynamic QR: a used nonce is remembered slightly longer than the 5-minute token life.
+QR_NONCE_TTL_SECONDS = config('QR_NONCE_TTL_SECONDS', default=360, cast=int)
+
+# Shared cache (password-reset codes, QR nonces). Without REDIS_URL Django keeps
+# its default per-process memory cache.
+REDIS_URL = config('REDIS_URL', default='')
+if REDIS_URL:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+            'LOCATION': REDIS_URL,
+        }
+    }
+
+# Production hardening, opt-in so plain-HTTP development and tests keep working.
+if config('HTTPS_ONLY', default=False, cast=bool):
+    SECURE_SSL_REDIRECT = True
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_HSTS_SECONDS = 31536000
+    # Only valid behind a reverse proxy that sets X-Forwarded-Proto.
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
