@@ -10,6 +10,7 @@ def gateway_settings(settings):
     settings.WALLET_RECHARGE_GATEWAY_THRESHOLD = 5.00
     settings.KUSHKI_API_URL = 'https://kushki.test'
     settings.KUSHKI_PRIVATE_MERCHANT_ID = 'test-private-merchant'
+    settings.KUSHKI_WEBHOOK_SECRET = ''
     settings.PAYPHONE_API_URL = 'https://payphone.test/api'
     settings.PAYPHONE_TOKEN = 'test-token'
     settings.PAYPHONE_STORE_ID = 'test-store'

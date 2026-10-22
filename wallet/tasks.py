@@ -3,7 +3,7 @@ from django.core.mail import EmailMultiAlternatives
 from django.template.loader import render_to_string
 from django.utils.html import strip_tags
 from celery import shared_task
-import zoneinfo
+from core.timezone import LOCAL_TIMEZONE
 from .models import Wallet
 
 
@@ -48,7 +48,7 @@ def send_recharge_confirmation_email(self, transaction_id: int) -> None:
     if not parent_user.email:
         return  # nothing to send to
 
-    local_date = transaction.created_at.astimezone(zoneinfo.ZoneInfo('America/Guayaquil'))
+    local_date = transaction.created_at.astimezone(LOCAL_TIMEZONE)
     formatted_date = local_date.strftime('%d/%m/%Y, %H:%M')
 
     context = {

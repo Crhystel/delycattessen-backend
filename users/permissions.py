@@ -1,5 +1,7 @@
 from rest_framework.permissions import BasePermission, SAFE_METHODS
+from django.core.cache import cache
 from django.utils.translation import gettext_lazy as _
+from .mixins import CODE_TTL_SECONDS
 from .models import CustomUser, StudentProfile
 
 
@@ -65,73 +67,55 @@ class CanRegisterBiometric(BasePermission):
         return False
 
 
-class IsAdministrator(BasePermission):
-    message = _('Solo el Administrador puede realizar esta acción.')
-
-    def has_permission(self, request, view):
-        return (
-            request.user
-            and request.user.is_authenticated
-            and request.user.role == request.user.Role.ADMIN
-        )
-
-
-class CanRequestPasswordReset(BasePermission):
-    """
-    Custom Permission Class: delegates authorization to a specialized class.
-    Currently always returns True (AllowAny), but establishes an architectural
-    contract for the future (e.g. rate limiting, IP blocking, suspended users).
-    """
-    def has_permission(self, request, view):
-        return True
-
-class IsParentUser(BasePermission):
-    """Only CustomUser with role PARENT can access the endpoint."""
-    message = 'Solo un padre de familia puede registrar estudiantes.'
-    def has_permission(self, request, view):
-        return bool( request.user and request.user.is_authenticated and request.user.role == CustomUser.Role.PARENT
-        )
-
-class IsTeacherUser(BasePermission):
-    """Only CustomUser with role TEACHER can access the endpoint."""
-    message = _('Solo un docente puede realizar esta acción.')
+class RolePermission(BasePermission):
+    """Base for "only these roles" permissions: subclasses set `allowed_roles`
+    (and `message`) and nothing else."""
+    allowed_roles = ()
 
     def has_permission(self, request, view):
         return bool(
             request.user
             and request.user.is_authenticated
-            and request.user.role == CustomUser.Role.TEACHER
+            and request.user.role in self.allowed_roles
         )
 
 
-class CanManageAllergies(BasePermission):
-    """A teacher can only manage their own allergies. A parent can only
-    manage the allergies of their own children."""
+class IsAdministrator(RolePermission):
+    message = _('Solo el Administrador puede realizar esta acción.')
+    allowed_roles = (CustomUser.Role.ADMIN,)
 
-    message = 'No tienes permiso para gestionar las alergias de este usuario.'
+
+class CanRequestPasswordReset(BasePermission):
+    """Public endpoint guard: at most MAX_REQUESTS calls per email and view
+    inside the reset-code lifetime, so codes cannot be brute-forced or the
+    mailbox flooded."""
+    message = _('Demasiados intentos. Intente nuevamente más tarde.')
+    MAX_REQUESTS = 5
 
     def has_permission(self, request, view):
-        target_user_id = request.data.get('target_user_id') or request.query_params.get('target_user_id')
-        if not target_user_id:
-            return False
+        email = str(request.data.get('email', '')).lower()
+        if not email:
+            return True
+        key = f'password_reset_calls:{view.__class__.__name__}:{email}'
+        cache.add(key, 0, timeout=CODE_TTL_SECONDS)
+        return cache.incr(key) <= self.MAX_REQUESTS
 
-        try:
-            target_user = CustomUser.objects.get(pk=target_user_id)
-        except CustomUser.DoesNotExist:
-            return False
 
-        if request.user.role == CustomUser.Role.TEACHER:
-            return target_user.id == request.user.id
+class IsParentUser(RolePermission):
+    """Only CustomUser with role PARENT can access the endpoint."""
+    message = _('Solo un padre de familia puede realizar esta acción.')
+    allowed_roles = (CustomUser.Role.PARENT,)
 
-        if request.user.role == CustomUser.Role.PARENT:
-            if not hasattr(request.user, 'parent_profile') or not hasattr(target_user, 'student_profile'):
-                return False
-            return target_user.student_profile.parent_id == request.user.parent_profile.id
 
-        return False
-    
+class IsTeacherUser(RolePermission):
+    """Only CustomUser with role TEACHER can access the endpoint."""
+    message = _('Solo un docente puede realizar esta acción.')
+    allowed_roles = (CustomUser.Role.TEACHER,)
+
+
 class IsParentOfStudent(BasePermission):
-    message = 'No tienes permiso sobre este estudiante'
+    message = _('No tienes permiso sobre este estudiante')
+
     def has_permission(self, request, view):
         student_id = view.kwargs.get('student_id')
         if not student_id or request.user.role != CustomUser.Role.PARENT:
@@ -139,28 +123,18 @@ class IsParentOfStudent(BasePermission):
         return StudentProfile.objects.filter(pk=student_id, parent__user=request.user).exists()
 
 
-class IsOperativeUser(BasePermission):
-    """Permission class ensuring only OPERATIONS_STAFF or ADMIN can trigger POS identification."""
+class IsOperativeUser(RolePermission):
+    """Only OPERATIONS_STAFF or ADMIN can trigger POS identification."""
     message = _('Solo el personal operativo puede realizar identificaciones en el POS.')
-
-    def has_permission(self, request, view):
-        return bool(
-            request.user
-            and request.user.is_authenticated
-            and request.user.role in [CustomUser.Role.OPERATIONS_STAFF, CustomUser.Role.ADMIN]
-        )
+    allowed_roles = (CustomUser.Role.OPERATIONS_STAFF, CustomUser.Role.ADMIN)
 
 
-class IsStudentOrTeacherUser(BasePermission):
-    """Permission class for student or teacher QR generation and contingency access."""
+class IsStudentOrTeacherUser(RolePermission):
+    """Student or teacher QR generation and contingency access."""
     message = _('Acceso restringido a Estudiantes y Docentes.')
+    allowed_roles = (CustomUser.Role.STUDENT, CustomUser.Role.TEACHER)
 
-    def has_permission(self, request, view):
-        return bool(
-            request.user
-            and request.user.is_authenticated
-            and request.user.role in [CustomUser.Role.STUDENT, CustomUser.Role.TEACHER]
-        )
+
 class CanManageStaffAccount(BasePermission):
     """Object-level policy for what an admin may do to a staff account.
     - Operations staff: full management (edit, activate/deactivate, delete).

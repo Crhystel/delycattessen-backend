@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
+from datetime import timedelta
 from pathlib import Path
 
 from decouple import config
@@ -50,8 +51,7 @@ INSTALLED_APPS = [
     'catalog',
     'wallet',
     'pos',
-    'profiles',
-    'reports',
+    'core',
     'corsheaders',
     'django_celery_results',
 ]
@@ -125,6 +125,9 @@ LANGUAGE_CODE = 'es'
 
 TIME_ZONE = 'UTC'
 
+# Business time zone (cut-off dates, daily limits, receipts). Storage stays in UTC.
+LOCAL_TIME_ZONE = config('LOCAL_TIME_ZONE', default='America/Guayaquil')
+
 USE_I18N = True
 
 USE_TZ = True
@@ -142,10 +145,8 @@ AUTH_USER_MODEL = 'users.CustomUser'
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
-# Password reset code validity (15 minutes = 900 seconds)
-PASSWORD_RESET_TIMEOUT = 900
- 
-from datetime import timedelta
+# Password reset code validity in seconds (default 15 minutes)
+PASSWORD_RESET_TIMEOUT = config('PASSWORD_RESET_TIMEOUT', default=900, cast=int)
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
@@ -161,7 +162,8 @@ AUTHENTICATION_BACKENDS = [
     'django.contrib.auth.backends.ModelBackend',
 ]
 # Celery / RabbitMQ configuration
-CELERY_BROKER_URL = config('RABBITMQ_URL', default='amqp://guest:guest@localhost:5672//')
+# Required: no default so no broker credentials live in the code.
+CELERY_BROKER_URL = config('RABBITMQ_URL')
 CELERY_RESULT_BACKEND = 'django-db'
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
@@ -177,17 +179,17 @@ CELERY_RESULT_EXPIRES = (
 # Don't hold extra messages in the worker's memory.
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 
-# MODO DESARROLLO (RabbitMQ 4.x fix)
+# Development mode (RabbitMQ 4.x fix)
 CELERY_WORKER_ENABLE_REMOTE_CONTROL = False
 CELERY_WORKER_SEND_TASK_EVENTS = False
 CELERY_WORKER_ENABLE_MINGLE = False
 CELERY_WORKER_ENABLE_GOSSIP = False
 
-# Email configuration 
-EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
-EMAIL_HOST = 'smtp.gmail.com'
-EMAIL_PORT = 587
-EMAIL_USE_TLS = True
+# Email configuration
+EMAIL_BACKEND = config('EMAIL_BACKEND', default='django.core.mail.backends.smtp.EmailBackend')
+EMAIL_HOST = config('EMAIL_HOST', default='smtp.gmail.com')
+EMAIL_PORT = config('EMAIL_PORT', default=587, cast=int)
+EMAIL_USE_TLS = config('EMAIL_USE_TLS', default=True, cast=bool)
 EMAIL_HOST_USER = config('EMAIL_HOST_USER')
 EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD')
 DEFAULT_FROM_EMAIL = config('EMAIL_HOST_USER')
@@ -195,9 +197,15 @@ DEFAULT_FROM_EMAIL = config('EMAIL_HOST_USER')
 
 WALLET_RECHARGE_GATEWAY_THRESHOLD = config('WALLET_RECHARGE_GATEWAY_THRESHOLD', default=5.00, cast=float)
 WALLET_RECHARGE_MIN_AMOUNT = config('WALLET_RECHARGE_MIN_AMOUNT', default=1.00, cast=float)
+# Balance below which a new wallet warns the parent.
+WALLET_LOW_BALANCE_DEFAULT = config('WALLET_LOW_BALANCE_DEFAULT', default=5.00, cast=float)
+# Seconds to wait for a payment gateway HTTP answer.
+GATEWAY_HTTP_TIMEOUT = config('GATEWAY_HTTP_TIMEOUT', default=10, cast=int)
 
 KUSHKI_PUBLIC_MERCHANT_ID = config('KUSHKI_PUBLIC_MERCHANT_ID', default='')
 KUSHKI_PRIVATE_MERCHANT_ID = config('KUSHKI_PRIVATE_MERCHANT_ID', default='')
+# Shared secret expected in the X-Webhook-Secret header of Kushki's webhook calls.
+KUSHKI_WEBHOOK_SECRET = config('KUSHKI_WEBHOOK_SECRET', default='')
 KUSHKI_API_URL = config('KUSHKI_API_URL', default='https://api-uat.kushkipagos.com')
 
 PAYPHONE_TOKEN = config('PAYPHONE_TOKEN', default='')
@@ -216,6 +224,11 @@ BIOMETRIC_ENCRYPTION_KEY = config('BIOMETRIC_ENCRYPTION_KEY', default='')
 # Minimum cosine-similarity gap between the two best face matches; below it the
 # POS refuses to pick one (two people with almost the same face vector).
 BIOMETRIC_AMBIGUITY_MARGIN = config('BIOMETRIC_AMBIGUITY_MARGIN', default=0.02, cast=float)
+# Minimum cosine similarity to accept a face match.
+BIOMETRIC_MATCH_THRESHOLD = config('BIOMETRIC_MATCH_THRESHOLD', default=0.40, cast=float)
+
+# Dynamic QR: a used nonce is remembered slightly longer than the 5-minute token life.
+QR_NONCE_TTL_SECONDS = config('QR_NONCE_TTL_SECONDS', default=360, cast=int)
 
 # Shared cache (password-reset codes, QR nonces). Without REDIS_URL Django keeps
 # its default per-process memory cache.

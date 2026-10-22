@@ -4,8 +4,7 @@ source =
     catalog
     wallet
     pos
-    profiles
-    reports
+    core
 omit =
     */migrations/*
     */tests/*

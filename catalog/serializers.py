@@ -17,7 +17,7 @@ class AllergenCreateSerializer(serializers.ModelSerializer):
         fields = ['id', 'name', 'description']
     def validate_name(self, value):
         if Allergen.objects.filter(name__iexact=value).exists():
-            raise serializers.ValidationError('Ya existe un alérgeno con ese nombre.')
+            raise serializers.ValidationError(_('Ya existe un alérgeno con ese nombre.'))
         return value
     
 class IngredientSerializer(serializers.ModelSerializer):
@@ -45,7 +45,7 @@ class IngredientCreateSerializer(serializers.ModelSerializer):
 
     def validate_name(self, value):
         if Ingredient.objects.filter(name__iexact=value).exists():
-            raise serializers.ValidationError('Ya existe un ingrediente con ese nombre.')
+            raise serializers.ValidationError(_('Ya existe un ingrediente con ese nombre.'))
         return value
 
     def create(self, validated_data):

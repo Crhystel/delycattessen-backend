@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 from django.conf import settings
+from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
 
 from delycattessen_backend.serializer_mixins import LineSummaryMixin
@@ -12,7 +13,9 @@ def validate_recharge_amount(value):
     """Single place that enforces the minimum recharge amount."""
     minimum = Decimal(str(settings.WALLET_RECHARGE_MIN_AMOUNT))
     if value < minimum:
-        raise serializers.ValidationError(f'El monto mínimo de recarga es ${minimum:.2f}.')
+        raise serializers.ValidationError(
+            _('El monto mínimo de recarga es $%(minimum).2f.') % {'minimum': minimum}
+        )
     return value
 
 
@@ -36,9 +39,10 @@ class RechargeRequestSerializer(serializers.Serializer):
 
     def validate_wallet_id(self, value):
         if not Wallet.objects.filter(pk=value).exists():
-            raise serializers.ValidationError('Wallet not found.')
+            raise serializers.ValidationError(_('Billetera no encontrada.'))
         return value
-    
+
+
 class TransactionSerializer(LineSummaryMixin, serializers.ModelSerializer):
     class Meta:
         model = Transaction
@@ -50,12 +54,12 @@ class TransactionSerializer(LineSummaryMixin, serializers.ModelSerializer):
             return [(item.menu_item.name, item.quantity, item.price_at_purchase) for item in obj.sale.items.all()]
         if obj.pre_order_id:
             return [
-                (item.dish.name if item.dish else 'Producto', item.quantity, item.price_at_purchase)
+                (item.dish.name if item.dish else _('Producto'), item.quantity, item.price_at_purchase)
                 for item in obj.pre_order.items.all()
             ]
         return []
 
     def get_display_name(self, obj):
         if obj.type == Transaction.Type.RECHARGE:
-            return 'Recarga de saldo'
+            return _('Recarga de saldo')
         return super().get_display_name(obj)

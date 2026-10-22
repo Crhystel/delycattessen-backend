@@ -1,7 +1,27 @@
 from __future__ import annotations
 
-from rest_framework.exceptions import ValidationError
+import hashlib
+import logging
+import os
+import threading
+from decimal import Decimal
+from typing import TYPE_CHECKING
+
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from django.conf import settings
+from django.db.models import Sum
 from django.utils.translation import gettext_lazy as _
+from rest_framework import status
+from rest_framework.exceptions import APIException, ValidationError
+
+from core.timezone import local_today
+from wallet.models import Transaction
+
+if TYPE_CHECKING:
+    import numpy as np  # type hints only; imported lazily at runtime
+
+logger = logging.getLogger(__name__)
+
 
 class AllergenValidatorMixin:
     """
@@ -26,13 +46,6 @@ class AllergenValidatorMixin:
                     }
                 )
 
-from django.utils import timezone
-from decimal import Decimal
-import zoneinfo
-from datetime import datetime
-from django.db.models import Sum
-from wallet.models import Transaction
-
 class ParentalControlValidatorMixin:
     def validate_parental_controls(self, student, amount, target_date=None):
         from users.models import ParentalControl
@@ -42,14 +55,14 @@ class ParentalControlValidatorMixin:
         except (ParentalControl.DoesNotExist, AttributeError):
             return
 
-        today_ec = datetime.now(zoneinfo.ZoneInfo('America/Guayaquil')).date()
+        today_ec = local_today()
         if target_date is None:
             target_date = today_ec
 
         if control.allowed_days_enabled:
             # 0 = Monday, ..., 6 = Sunday
             if target_date.weekday() not in control.allowed_days:
-                raise ValidationError("No está permitido comprar para ese día: está bloqueado por el control parental.")
+                raise ValidationError(_("No está permitido comprar para ese día: está bloqueado por el control parental."))
 
         if control.daily_limit_enabled:
             preorders_sum = PreOrder.objects.filter(
@@ -72,24 +85,9 @@ class ParentalControlValidatorMixin:
 
             spent_target_date = preorders_sum + direct_sum
             if spent_target_date + Decimal(str(amount)) > control.daily_limit_amount:
-                raise ValidationError("La preorden supera el límite de gasto diario configurado para ese día.")
+                raise ValidationError(_("La preorden supera el límite de gasto diario configurado para ese día."))
 
 
-import os
-import io
-import hashlib
-import logging
-import threading
-from typing import TYPE_CHECKING
-from django.conf import settings
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from rest_framework import status
-from rest_framework.exceptions import APIException, ValidationError
-
-if TYPE_CHECKING:
-    import numpy as np  # type hints only; imported lazily at runtime
-
-logger = logging.getLogger(__name__)
 
 
 class FaceAlreadyRegistered(APIException):
@@ -192,24 +190,24 @@ class BiometricValidationMixin:
                 raw_bytes = bytes(image_file_or_bytes)
 
             if not raw_bytes:
-                raise ValidationError("No se proveyeron datos de imagen para la identificación biométrica.")
+                raise ValidationError(_("No se proveyeron datos de imagen para la identificación biométrica."))
 
             nparr = np.frombuffer(raw_bytes, np.uint8)
             img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
             if img is None:
-                raise ValidationError("Formato de imagen no soportado o archivo corrupto.")
+                raise ValidationError(_("Formato de imagen no soportado o archivo corrupto."))
 
             h, w = img.shape[:2]
 
             with _BIOMETRIC_LOCK:
                 detector, recognizer = _get_biometric_models()
                 detector.setInputSize((w, h))
-                _, faces = detector.detect(img)
+                _retval, faces = detector.detect(img)
 
                 if faces is None or len(faces) == 0:
                     raise ValidationError(
-                        "No se detectó un rostro claro en la imagen. "
-                        "Por favor, asegúrate de colocar el rostro dentro del encuadre con buena iluminación."
+                        _("No se detectó un rostro claro en la imagen. "
+                          "Por favor, asegúrate de colocar el rostro dentro del encuadre con buena iluminación.")
                     )
 
                 # Pick largest face (the primary subject in the frame)
@@ -317,9 +315,8 @@ class BiometricValidationMixin:
         self,
         candidate_embedding: np.ndarray,
         institution=None,
-        threshold: float = 0.40,
+        threshold: float | None = None,
         all_institutions: bool = False,
-        
     ):
         """
         Matches a candidate embedding against the registered biometrics of the
@@ -329,7 +326,8 @@ class BiometricValidationMixin:
         nobody is returned and the POS falls back to the QR code.
         Returns (matched_user, similarity_score) or (None, best_score / -1.0).
         """
-        from django.conf import settings
+        if threshold is None:
+            threshold = settings.BIOMETRIC_MATCH_THRESHOLD
 
         users, similarities = self._score_candidates(
             candidate_embedding, institution=institution, all_institutions=all_institutions,
@@ -355,7 +353,7 @@ class BiometricValidationMixin:
         return users[best_idx], best_score
 
     def ensure_face_not_registered(
-        self, vector: np.ndarray, institution, exclude_user=None, threshold: float = 0.40,
+        self, vector: np.ndarray, institution, exclude_user=None, threshold: float | None = None,
     ) -> None:
         """
         Raises FaceAlreadyRegistered (409) if this face already belongs to
@@ -363,7 +361,9 @@ class BiometricValidationMixin:
         the POS uses to recognize people, so a face accepted here can be told
         apart there. `exclude_user` is the owner (changing their own photo).
         """
-        _, similarities = self._score_candidates(
+        if threshold is None:
+            threshold = settings.BIOMETRIC_MATCH_THRESHOLD
+        _scored_users, similarities = self._score_candidates(
             vector, institution=institution, exclude_user=exclude_user,
         )
         if len(similarities) and float(similarities.max()) >= threshold:

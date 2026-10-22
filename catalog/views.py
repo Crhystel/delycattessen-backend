@@ -1,15 +1,34 @@
-from rest_framework import generics
-from rest_framework.permissions import IsAuthenticated, IsAdminUser
-from users.permissions import IsAdministrator
+from datetime import datetime, timedelta
+
+from django.db.models import Prefetch
+from django.shortcuts import get_object_or_404
+from django.utils.translation import gettext_lazy as _
+from rest_framework import generics, status
+from rest_framework.exceptions import ValidationError
+from rest_framework.permissions import IsAdminUser, IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from core.timezone import local_today
 from users.mixins import OwnInstitutionMixin, ViewerInstitutionMixin
-from .models import MenuItem, Ingredient, Allergen
+from users.models import StudentProfile
+from users.permissions import IsAdministrator, IsOperativeUser, IsParentOfStudent, SameInstitutionAsTarget
+
+from .models import Allergen, DailyMenu, Ingredient, MenuDish, MenuItem, MonthlyMenu
 from .serializers import (
-    MenuItemSerializer,
-    IngredientSerializer,
-    IngredientCreateSerializer,
-    AllergenSerializer,
     AllergenCreateSerializer,
+    AllergenSerializer,
+    DailyMenuSerializer,
+    DailyMenuUpdateSerializer,
+    IngredientCreateSerializer,
+    IngredientSerializer,
+    MenuDishSerializer,
+    MenuItemSerializer,
+    MonthlyMenuCreateSerializer,
+    MonthlyMenuSerializer,
+    StudentDailyMenuSerializer,
 )
+from .services import MonthlyMenuService
 
 
 class MenuListView(ViewerInstitutionMixin, generics.ListAPIView):
@@ -93,28 +112,6 @@ class AllergenCreateView(generics.CreateAPIView):
     permission_classes = [IsAuthenticated]
 
 
-from datetime import datetime, timedelta
-import zoneinfo
-from django.db.models import Prefetch
-from django.shortcuts import get_object_or_404
-from django.utils.translation import gettext_lazy as _
-from rest_framework import status
-from rest_framework.response import Response
-from rest_framework.views import APIView
-from rest_framework.exceptions import ValidationError
-from users.models import StudentProfile
-from users.permissions import IsAdministrator, IsParentOfStudent, IsOperativeUser, SameInstitutionAsTarget
-from .models import MenuDish, MonthlyMenu, DailyMenu
-from .serializers import (
-    MenuDishSerializer,
-    MonthlyMenuCreateSerializer,
-    MonthlyMenuSerializer,
-    DailyMenuSerializer,
-    DailyMenuUpdateSerializer,
-    StudentDailyMenuSerializer,
-)
-from .services import MonthlyMenuService
-
 
 class MenuDishListCreateView(OwnInstitutionMixin, generics.ListCreateAPIView):
     """
@@ -141,16 +138,17 @@ class MenuDishDetailView(OwnInstitutionMixin, generics.RetrieveUpdateDestroyAPIV
     permission_classes = [IsAdministrator]
     queryset = MenuDish.objects.all()
 
-    def update(self, request, *args, **kwargs):
-        instance = self.get_object()
-        if MonthlyMenuService.dish_has_pending_preorders(instance):
+    def ensure_no_pending_preorders(self, dish):
+        if MonthlyMenuService.dish_has_pending_preorders(dish):
             raise ValidationError(_('Este platillo tiene preórdenes pendientes y no se puede modificar.'))
+
+    def update(self, request, *args, **kwargs):
+        self.ensure_no_pending_preorders(self.get_object())
         return super().update(request, *args, **kwargs)
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
-        if MonthlyMenuService.dish_has_pending_preorders(instance):
-            raise ValidationError(_('Este platillo tiene preórdenes pendientes y no se puede modificar.'))
+        self.ensure_no_pending_preorders(instance)
         instance.is_active = False
         instance.save(update_fields=['is_active', 'updated_at'])
         return Response(status=status.HTTP_204_NO_CONTENT)
@@ -280,7 +278,7 @@ class BaseStudentMenuView(APIView):
             id=student_id,
         )
         self.check_student(request, student)
-        today_ec = datetime.now(zoneinfo.ZoneInfo('America/Guayaquil')).date()
+        today_ec = local_today()
         days = DailyMenu.objects.filter(
             monthly_menu__institution=student.institution,
             monthly_menu__status=MonthlyMenu.Status.PUBLISHED,
@@ -317,4 +315,4 @@ class POSStudentMenuView(BaseStudentMenuView):
     menus from today onward, restricted to the operator's own institution
     (an admin may widen it with ?institution=all).
     """
-    permission_classes = [IsOperativeUser, SameInstitutionAsTarget]
+    permission_classes = [IsOperativeUser, SameInstitutionAsTarget]

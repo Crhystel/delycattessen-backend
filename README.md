@@ -14,14 +14,13 @@ Backend del sistema de gestión de ventas y control de servicios alimentarios de
 
 ## Estructura de apps
 
-El backend está organizado en 6 apps, cada una correspondiente a un módulo del sistema:
+El backend está organizado en 5 apps, cada una correspondiente a un módulo del sistema:
 
 - `users` - Gestión de acceso, registro y perfil de usuario
 - `catalog` - Catálogo de productos e inventario
 - `wallet` - Billetera digital y recargas autónomas
-- `profiles` - Control parental y gestión de alérgenos
 - `pos` - Identificación biométrica, QR y procesamiento de cobros
-- `reports` - Analítica automatizada de ventas
+- `core` - Código compartido entre apps (mixins, utilidades de zona horaria)
 
 ## Requisitos previos
 

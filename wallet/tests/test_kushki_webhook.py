@@ -94,3 +94,16 @@ def test_webhook_does_not_require_authentication(api_client, kushki_transaction)
     response = api_client.post(URL, {'ticketNumber': 'T-123'}, format='json')
 
     assert response.status_code == 200
+
+def test_webhook_requires_secret_header_when_configured(api_client, kushki_transaction, settings, mock_celery_delay):
+    settings.KUSHKI_WEBHOOK_SECRET = 'shared-secret'
+    payload = {'ticketNumber': 'T-123', 'transactionStatus': 'APPROVED'}
+
+    rejected = api_client.post(URL, payload, format='json')
+    wrong = api_client.post(URL, payload, format='json', HTTP_X_WEBHOOK_SECRET='nope')
+    accepted = api_client.post(URL, payload, format='json', HTTP_X_WEBHOOK_SECRET='shared-secret')
+
+    assert rejected.status_code in (401, 403)
+    assert wrong.status_code in (401, 403)
+    assert accepted.status_code == 200
+    mock_celery_delay.email.assert_called_once()

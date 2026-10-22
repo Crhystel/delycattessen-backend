@@ -1,8 +1,7 @@
-import zoneinfo
-
+from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
 
-LOCAL_TIMEZONE = zoneinfo.ZoneInfo('America/Guayaquil')
+from core.timezone import LOCAL_TIMEZONE
 
 
 class LineSummaryMixin(serializers.Serializer):
@@ -12,7 +11,7 @@ class LineSummaryMixin(serializers.Serializer):
     returning (name, quantity, price) tuples, and list the three fields in Meta.
     Meant to be combined with a ModelSerializer that has a `created_at` field.
     """
-    empty_display_name = 'Consumo'
+    empty_display_name = _('Consumo')
 
     display_name = serializers.SerializerMethodField()
     time = serializers.SerializerMethodField()
@@ -22,12 +21,12 @@ class LineSummaryMixin(serializers.Serializer):
         raise NotImplementedError
 
     def get_display_name(self, obj):
-        names = [name for name, _quantity, _price in self.get_lines(obj)]
+        names = [name for name, *_rest in self.get_lines(obj)]
         if not names:
             return self.empty_display_name
         if len(names) == 1:
             return names[0]
-        return f'{names[0]} y {len(names) - 1} más'
+        return _('%(first)s y %(count)s más') % {'first': names[0], 'count': len(names) - 1}
 
     def get_time(self, obj):
         local_time = obj.created_at.astimezone(LOCAL_TIMEZONE)

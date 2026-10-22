@@ -1,9 +1,19 @@
-import random
+import secrets
+
+from django.conf import settings
 from django.core.cache import cache
-from django.contrib.auth.tokens import default_token_generator
 from rest_framework.permissions import SAFE_METHODS
 
-CODE_TTL_SECONDS = 900  # 15 minutes
+CODE_TTL_SECONDS = settings.PASSWORD_RESET_TIMEOUT
+MAX_CODE_ATTEMPTS = 5
+
+
+def reset_code_key(email: str) -> str:
+    return f'password_reset_code:{email}'
+
+
+def reset_attempts_key(email: str) -> str:
+    return f'password_reset_attempts:{email}'
 
 
 ALL_INSTITUTIONS = 'all'
@@ -110,29 +120,6 @@ class ViewerInstitutionMixin:
         return queryset.filter(**{self.institution_lookup: institution})
 
 
-class InstitutionScopeMixin:
-    """
-    Mixin Pattern (Template Method over DRF's get_queryset): defines the
-    data scope based on role and an optional 'institution' query parameter
-    (see resolve_institution_scope). Only teachers and operations staff
-    are exposed through this mixin; other roles get an empty queryset.
-    """
-    def get_queryset(self):
-        queryset = super().get_queryset()
-        from .models import CustomUser
-
-        if self.request.user.role not in (CustomUser.Role.OPERATIONS_STAFF, CustomUser.Role.ADMIN):
-            return queryset.none()
-
-        if self.request.method in SAFE_METHODS:
-            institution = resolve_institution_scope(self.request)
-        else:
-            institution = resolve_write_institution(self.request)
-        if institution is None:
-            return queryset
-        return queryset.filter(institution=institution)
-
-
 class TokenGeneratorMixin:
     """
     Mixin Pattern: abstracts the repetitive logic of generating cryptographic
@@ -140,8 +127,9 @@ class TokenGeneratorMixin:
     requires this behavior.
     """
     def generate_and_send_token(self, user, email: str) -> None:
-        code = f"{random.randint(0,999999):06d}"
-        cache.set(f"password_reset_code:{email}", code, timeout=CODE_TTL_SECONDS)
+        code = f'{secrets.randbelow(1_000_000):06d}'
+        cache.set(reset_code_key(email), code, timeout=CODE_TTL_SECONDS)
+        cache.delete(reset_attempts_key(email))
         from .tasks import send_password_reset_email
         send_password_reset_email.delay(email, code)
 
@@ -172,6 +160,7 @@ class OwnInstitutionMixin:
     returns that target.
     """
     institution_lookup = 'institution'
+    allowed_roles = None  # None = every role; otherwise only these get data
 
     def get_user_institution(self):
         return resolve_write_institution(self.request)
@@ -186,6 +175,8 @@ class OwnInstitutionMixin:
 
     def get_queryset(self):
         queryset = super().get_queryset()
+        if self.allowed_roles is not None and self.request.user.role not in self.allowed_roles:
+            return queryset.none()
         if self.request.method in SAFE_METHODS:
             institution = resolve_institution_scope(self.request)
         else:
@@ -193,3 +184,11 @@ class OwnInstitutionMixin:
         if institution is None:
             return queryset
         return queryset.filter(**{self.institution_lookup: institution})
+
+
+class InstitutionScopeMixin(OwnInstitutionMixin):
+    """
+    OwnInstitutionMixin restricted to the roles that manage staff data
+    (operations staff and admins); any other role gets an empty queryset.
+    """
+    allowed_roles = ('OPERATIONS_STAFF', 'ADMIN')

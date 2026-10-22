@@ -5,8 +5,17 @@ from decimal import Decimal
 import requests
 from django.conf import settings
 from django.db import transaction as db_transaction
+from django.db.models import F
+from django.utils.translation import gettext_lazy as _
 
 from .models import Transaction, Wallet
+
+
+def credit_wallet(wallet: Wallet, amount: Decimal) -> None:
+    """Adds `amount` in the database (not in Python) so a concurrent debit or
+    recharge on the same wallet cannot be overwritten."""
+    Wallet.objects.filter(pk=wallet.pk).update(balance=F('balance') + amount)
+    wallet.refresh_from_db(fields=['balance'])
 
 
 class GatewayError(Exception):
@@ -65,8 +74,7 @@ class PaymentGateway(ABC):
         )
 
     def _credit_balance(self, wallet: Wallet, amount: Decimal) -> None:
-        wallet.balance += amount
-        wallet.save(update_fields=['balance'])
+        credit_wallet(wallet, amount)
 
     @abstractmethod
     def _send_charge_request(
@@ -88,7 +96,7 @@ class KushkiGateway(PaymentGateway):
         phone_number: str = None,
     ) -> str:
         if not token:
-            raise GatewayError('Falta el token de Kushki generado en el frontend.')
+            raise GatewayError(_('Falta el token de Kushki generado en el frontend.'))
 
         parent_user = wallet.student.parent.user
 
@@ -117,19 +125,19 @@ class KushkiGateway(PaymentGateway):
                     'Private-Merchant-Id': settings.KUSHKI_PRIVATE_MERCHANT_ID,
                     'Content-Type': 'application/json',
                 },
-                timeout=10,
+                timeout=settings.GATEWAY_HTTP_TIMEOUT,
             )
             data = response.json()
         except requests.ConnectionError as exc:
             # Includes ConnectTimeout: the request never reached Kushki, retry is safe.
-            raise GatewayUnavailableError('Kushki no está disponible.') from exc
+            raise GatewayUnavailableError(_('Kushki no está disponible.')) from exc
         except requests.RequestException as exc:
             # E.g. ReadTimeout or a non-JSON body: the charge may have gone through,
             # so it must NOT be retried automatically.
-            raise GatewayError('Kushki no respondió al cobro.') from exc
+            raise GatewayError(_('Kushki no respondió al cobro.')) from exc
 
         if response.status_code not in (200, 201) or 'ticketNumber' not in data:
-            raise GatewayError(data.get('message', 'Kushki rechazó el cobro.'))
+            raise GatewayError(data.get('message', _('Kushki rechazó el cobro.')))
         return data['ticketNumber']
 
 
@@ -185,19 +193,19 @@ class PayphonePreparer:
                     'Authorization': f'Bearer {settings.PAYPHONE_TOKEN}',
                     'Content-Type': 'application/json',
                 },
-                timeout=10,
+                timeout=settings.GATEWAY_HTTP_TIMEOUT,
             )
         except requests.RequestException as exc:
             # Gateway unreachable: do not leave an orphan PENDING transaction.
             transaction.status = Transaction.Status.FAILED
             transaction.save(update_fields=['status'])
-            raise GatewayError('Payphone no está disponible.') from exc
+            raise GatewayError(_('Payphone no está disponible.')) from exc
 
         if response.status_code != 200:
             error_data = response.json() if response.content else {}
             transaction.status = Transaction.Status.FAILED
             transaction.save(update_fields=['status'])
-            raise GatewayError(error_data.get('message', 'Payphone rechazó la recarga.'))
+            raise GatewayError(error_data.get('message', _('Payphone rechazó la recarga.')))
 
         data = response.json()
         payment_url = data['payWithCard']
@@ -232,15 +240,14 @@ class PayphonePreparer:
                     'Authorization': f'Bearer {settings.PAYPHONE_TOKEN}',
                     'Content-Type': 'application/json',
                 },
-                timeout=10,
+                timeout=settings.GATEWAY_HTTP_TIMEOUT,
             )
             response.raise_for_status()
             data = response.json()
 
             if data.get('transactionStatus') == 'Approved':
                 transaction.status = Transaction.Status.SUCCESS
-                transaction.wallet.balance += transaction.amount
-                transaction.wallet.save(update_fields=['balance'])
+                credit_wallet(transaction.wallet, transaction.amount)
 
                 from .tasks import send_recharge_confirmation_email
                 send_recharge_confirmation_email.delay(transaction.id)

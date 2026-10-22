@@ -1,10 +1,12 @@
+from django.utils.translation import gettext_lazy as _
 from rest_framework.exceptions import ValidationError
+
 from .models import Ingredient
 
 
 class IngredientValidationMixin:
-    # Intercepta la validación para asegurar que haya ingredientes
-    # y que todos tengan sus alérgenos confirmados por un admin.
+    # Intercepts validation to ensure the product has ingredients and that an
+    # admin confirmed the allergens of every one of them.
     def validate(self, attrs):
         request = self.context.get('request')
         if request and request.method in ['POST', 'PUT', 'PATCH']:
@@ -19,7 +21,7 @@ class IngredientValidationMixin:
                 ingredients = [ingredients] if ingredients is not None else []
 
             if not ingredients or len(ingredients) == 0:
-                raise ValidationError({'ingredients': 'You must provide at least one ingredient for the product.'})
+                raise ValidationError({'ingredients': _('Debe indicar al menos un ingrediente para el producto.')})
 
             unreviewed = list(
                 Ingredient.objects.filter(
@@ -28,11 +30,10 @@ class IngredientValidationMixin:
             )
             if unreviewed:
                 raise ValidationError({
-                    'ingredients': (
-                        'Estos ingredientes no tienen sus alérgenos confirmados: '
-                        f'{", ".join(unreviewed)}. Confírmalos en "Gestionar '
-                        'alérgenos por ingrediente" antes de guardar el producto.'
-                    )
+                    'ingredients': _(
+                        'Estos ingredientes no tienen sus alérgenos confirmados: %(names)s. '
+                        'Confírmalos en "Gestionar alérgenos por ingrediente" antes de guardar el producto.'
+                    ) % {'names': ', '.join(unreviewed)}
                 })
         return super().validate(attrs)
 

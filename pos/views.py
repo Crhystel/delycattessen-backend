@@ -1,23 +1,35 @@
+import logging
 from decimal import Decimal
-import zoneinfo
-from datetime import datetime
-from rest_framework import generics, status
-from rest_framework.response import Response
+
+import jwt
+from django.conf import settings
+from django.core.cache import cache
 from django.db import transaction
-from rest_framework.permissions import IsAuthenticated
 from django.utils.translation import gettext_lazy as _
+from rest_framework import generics, status
+from rest_framework.exceptions import ValidationError
+from rest_framework.generics import get_object_or_404
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from catalog.models import DailyMenu, MonthlyMenu
+from core.timezone import local_now, local_today
+from users.mixins import resolve_institution_scope, resolve_write_institution
+from users.models import CustomUser, StudentProfile
+from users.permissions import IsOperativeUser, IsParentUser, IsTeacherUser, SameInstitutionAsTarget
+from wallet.models import Transaction, Wallet
+
+from .mixins import AllergenValidatorMixin, BiometricValidationMixin, ParentalControlValidatorMixin
+from .models import PreOrder, PreOrderItem, Sale
 from .serializers import (
     ParentSaleSerializer, PreOrderCreateSerializer, PreOrderListSerializer, SaleCreateSerializer, SaleSerializer,
 )
-from .models import PreOrder, PreOrderItem, Sale
-from .services import LOCAL_TIMEZONE, monthly_credit_total, process_sale
-from .mixins import AllergenValidatorMixin, ParentalControlValidatorMixin
-from users.permissions import IsParentUser
-from users.models import StudentProfile
-from wallet.models import Wallet, Transaction
-from catalog.models import MenuDish, DailyMenu, MonthlyMenu
-from rest_framework.exceptions import ValidationError
-from rest_framework.generics import get_object_or_404
+from .services import monthly_credit_total, process_sale
+
+logger = logging.getLogger(__name__)
+
 
 class PreOrderCreateView(AllergenValidatorMixin, ParentalControlValidatorMixin, generics.CreateAPIView):
     serializer_class = PreOrderCreateSerializer
@@ -47,7 +59,7 @@ class PreOrderCreateView(AllergenValidatorMixin, ParentalControlValidatorMixin, 
             )
 
         # 2. Hora de corte: delivery_date > today en America/Guayaquil
-        today_ec = datetime.now(zoneinfo.ZoneInfo('America/Guayaquil')).date()
+        today_ec = local_today()
         if delivery_date <= today_ec:
             raise ValidationError(
                 _("No se puede preordenar para hoy o fechas pasadas. La fecha de entrega debe ser posterior a hoy.")
@@ -154,16 +166,6 @@ class PreOrderListView(generics.ListAPIView):
         return queryset.order_by('-created_at')
 
 
-import jwt
-from django.conf import settings
-from django.core.cache import cache
-from rest_framework.views import APIView
-from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
-from users.permissions import IsOperativeUser, IsTeacherUser, SameInstitutionAsTarget
-from users.mixins import resolve_institution_scope, resolve_write_institution
-from users.models import CustomUser
-from .mixins import BiometricValidationMixin
-
 def _build_identified_user_payload(user: CustomUser, method: str) -> dict:
     """Constructs the standard user summary response for POS checkout."""
     balance = "0.00"
@@ -182,7 +184,7 @@ def _build_identified_user_payload(user: CustomUser, method: str) -> dict:
         if hasattr(student_profile, 'wallet'):
             balance = str(student_profile.wallet.balance)
 
-        today_ec = datetime.now(zoneinfo.ZoneInfo('America/Guayaquil')).date()
+        today_ec = local_today()
         pending_preorders = PreOrder.objects.filter(
             student=student_profile,
             status=PreOrder.Status.PENDING,
@@ -254,9 +256,12 @@ class POSFaceIdentificationView(BiometricValidationMixin, APIView):
         # 1. Extract embedding and wipe image memory
         try:
             candidate_embedding = self.extract_face_embedding(photo)
-        except Exception as e:
+        except ValidationError:
+            raise
+        except Exception:
+            logger.exception("[BIOMETRIC] Error extracting facial features at the POS")
             return Response(
-                {"detail": f"Error al procesar rasgos faciales: {str(e)}"},
+                {"detail": _("No se pudieron procesar los rasgos faciales de la imagen.")},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
@@ -265,7 +270,6 @@ class POSFaceIdentificationView(BiometricValidationMixin, APIView):
         matched_user, similarity = self.match_face(
             candidate_embedding,
             institution=institution,
-            threshold=0.40,
             all_institutions=institution is None,
         )
 
@@ -336,8 +340,8 @@ class POSQrIdentificationView(APIView):
                 {"detail": _("Este código QR ya fue utilizado. No se permite suplantación.")},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        # Mark nonce as used for 6 minutes (safely covers 5-minute token TTL)
-        cache.set(cache_key, True, timeout=360)
+        # Remember the nonce a bit longer than the token lives (QR_NONCE_TTL_SECONDS).
+        cache.set(cache_key, True, timeout=settings.QR_NONCE_TTL_SECONDS)
 
         # 3. Retrieve user
         user_id = payload.get('user_id')
@@ -375,11 +379,11 @@ class PreOrderDeliverView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        today_ec = datetime.now(zoneinfo.ZoneInfo('America/Guayaquil')).date()
+        today_ec = local_today()
         if pre_order.daily_menu.date != today_ec:
             formatted_date = pre_order.daily_menu.date.strftime('%d/%m/%Y')
             return Response(
-                {"detail": _(f"Esta preorden es para el {formatted_date}, no para hoy.")},
+                {"detail": _("Esta preorden es para el %(date)s, no para hoy.") % {'date': formatted_date}},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -437,7 +441,7 @@ class CreditHistoryView(APIView):
             customer=request.user, payment_method=Sale.PaymentMethod.CREDIT,
         ).prefetch_related('items__menu_item')
         return Response({
-            'month': datetime.now(LOCAL_TIMEZONE).strftime('%Y-%m'),
+            'month': local_now().strftime('%Y-%m'),
             'accumulated_total': str(monthly_credit_total(request.user)),
             'results': SaleSerializer(sales[:self.max_results], many=True).data,
         })

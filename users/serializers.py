@@ -1,19 +1,23 @@
 import logging
 import secrets
 import string
+
+from django.contrib.auth import get_user_model
+from django.core.cache import cache
+from django.db import transaction
+from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+
+from catalog.models import Allergen
+
+from .models import CustomUser, Institution, ParentalControl, ParentProfile, StudentProfile
+from .mixins import (
+    CODE_TTL_SECONDS, MAX_CODE_ATTEMPTS, UppercaseNamesMixin, reset_attempts_key, reset_code_key,
+)
+from .fields import PasswordField
 
 logger = logging.getLogger(__name__)
-from django.contrib.auth import get_user_model
-from django.contrib.auth.tokens import default_token_generator
-from django.db import transaction
-from django.core.cache import cache
-from django.utils.translation import gettext_lazy as _
-from .models import Institution, ParentProfile, StudentProfile, CustomUser
-from catalog.models import Allergen
-from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
-from .mixins import UppercaseNamesMixin
-from .fields import PasswordField
 
 User = get_user_model()
 
@@ -120,12 +124,9 @@ class UpdateStaffSerializer(UppercaseNamesMixin, serializers.ModelSerializer):
         return super().update(instance, validated_data)
 
 class PasswordResetRequestSerializer(serializers.Serializer):
+    # No existence check on purpose: answering differently for unknown emails
+    # would let anyone discover which emails are registered.
     email = serializers.EmailField()
-
-    def validate_email(self, value: str) -> str:
-        if not User.objects.filter(email=value, is_active=True).exists():
-            raise serializers.ValidationError(_('No existe un usuario activo con este correo electrónico.'))
-        return value
 
 
 class PasswordResetConfirmSerializer(serializers.Serializer):
@@ -142,8 +143,13 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
         if attrs['new_password'] != attrs['confirm_password']:
             raise serializers.ValidationError(_('Las contraseñas no coinciden.'))
 
-        cached_code = cache.get(f"password_reset_code:{email}")
-        if cached_code is None or cached_code != code:
+        cached_code = cache.get(reset_code_key(email))
+        attempts_key = reset_attempts_key(email)
+        if cached_code is None or cache.get(attempts_key, 0) >= MAX_CODE_ATTEMPTS:
+            raise serializers.ValidationError(_('El código es inválido o ha expirado.'))
+        if not secrets.compare_digest(cached_code, code):
+            cache.add(attempts_key, 0, timeout=CODE_TTL_SECONDS)
+            cache.incr(attempts_key)
             raise serializers.ValidationError(_('El código es inválido o ha expirado.'))
 
         try:
@@ -161,7 +167,8 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
         user.set_password(self.validated_data['new_password'])
         user.must_change_password = False
         user.save()
-        cache.delete(f"password_reset_code:{email}")
+        cache.delete(reset_code_key(email))
+        cache.delete(reset_attempts_key(email))
         return user
 
 
@@ -202,7 +209,7 @@ class ParentRegistrationSerializer(serializers.Serializer):
     def validate_email(self, value):
         value = value.lower()
         if CustomUser.objects.filter(email__iexact=value).exists():
-            raise serializers.ValidationError('Ya existe una cuenta con este correo.')
+            raise serializers.ValidationError(_('Ya existe una cuenta con este correo.'))
         return value
 
     def validate(self, attrs):
@@ -247,7 +254,7 @@ class StudentRegistrationSerializer(UppercaseNamesMixin,serializers.Serializer):
 
     def validate_username(self, value):
         if CustomUser.objects.filter(username=value).exists():
-            raise serializers.ValidationError('Ese nombre de usuario ya está en uso.')
+            raise serializers.ValidationError(_('Ese nombre de usuario ya está en uso.'))
         return value
     
     def validate(self, attrs):
@@ -355,12 +362,11 @@ class AllergenSerializer(serializers.ModelSerializer):
     
 
 class SetPaymentPinSerializer(serializers.Serializer):
-    pin = serializers.RegexField(regex=r'^\d{4}$', error_messages={'invalid': 'El PIN debe tener exactamente 4 dígitos.'})
+    pin = serializers.RegexField(regex=r'^\d{4}$', error_messages={'invalid': _('El PIN debe tener exactamente 4 dígitos.')})
 
 
 class VerifyPaymentPinSerializer(serializers.Serializer):
     pin = serializers.CharField(max_length=4)
-from .models import ParentalControl
 
 class ParentalControlSerializer(serializers.ModelSerializer):
     class Meta:

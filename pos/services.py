@@ -1,5 +1,3 @@
-import zoneinfo
-from datetime import datetime
 from decimal import Decimal
 
 from django.db import transaction
@@ -8,6 +6,7 @@ from django.utils.translation import gettext_lazy as _
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from catalog.models import MenuItem
+from core.timezone import local_now
 from users.models import CustomUser
 from users.permissions import get_object_institution_id
 from wallet.models import Transaction, Wallet
@@ -164,12 +163,9 @@ def process_sale(payment_method, institution, cashier, customer, lines):
     return PROCESSORS[payment_method](institution, cashier, customer).process(lines)
 
 
-LOCAL_TIMEZONE = zoneinfo.ZoneInfo('America/Guayaquil')
-
-
 def month_start_local(now=None):
     """First instant of the current month in the institution's timezone."""
-    now = now or datetime.now(LOCAL_TIMEZONE)
+    now = now or local_now()
     return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
 

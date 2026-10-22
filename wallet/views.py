@@ -4,6 +4,7 @@ from urllib.parse import urlparse
 import requests
 from django.conf import settings
 from django.http import HttpResponse
+from django.utils.translation import gettext_lazy as _
 from rest_framework import status
 from rest_framework.generics import get_object_or_404
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -11,7 +12,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .models import Transaction, Wallet
-from .permissions import IsWalletOwnerParent
+from .permissions import HasKushkiWebhookSecret, IsWalletOwnerParent
 from users.permissions import IsParentUser
 
 from .serializers import RechargeGatewayQuerySerializer, RechargeRequestSerializer, TransactionSerializer
@@ -111,13 +112,13 @@ class WalletRechargeView(APIView):
             )
 
         if not kushki_token:
-            return Response({'detail': 'Falta el token de Kushki.'}, status=400)
+            return Response({'detail': _('Falta el token de Kushki.')}, status=400)
 
         process_recharge_task.delay(
             wallet.id, str(amount), kushki_token, document_type, document_number, phone_number,
         )
         return Response(
-            {'detail': 'Recharge request received, processing.'},
+            {'detail': _('Recarga recibida, procesando.')},
             status=status.HTTP_202_ACCEPTED,
         )
 
@@ -141,7 +142,7 @@ class PayphoneCallbackView(APIView):
         except Transaction.DoesNotExist:
             return Response({'detail': 'Transaction not found.'}, status=404)
         except requests.RequestException:
-            return Response({'detail': 'Payphone no respondió correctamente.'}, status=502)
+            return Response({'detail': _('Payphone no respondió correctamente.')}, status=502)
         return Response({'status': transaction.status})
 
 
@@ -165,7 +166,7 @@ class KushkiWebhookView(APIView):
     """POST /api/wallet/kushki/webhook/
     Kushki notifies transaction events here."""
 
-    permission_classes = [AllowAny]
+    permission_classes = [HasKushkiWebhookSecret]
 
     def post(self, request):
         ticket_number = request.data.get('ticketNumber')

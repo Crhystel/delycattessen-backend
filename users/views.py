@@ -1,52 +1,60 @@
 import logging
-from rest_framework import generics, status
-from rest_framework.generics import get_object_or_404
-from rest_framework.response import Response
+import uuid
+from datetime import datetime, timedelta, timezone
 
-logger = logging.getLogger(__name__)
-from rest_framework.permissions import AllowAny, IsAuthenticated
-from rest_framework.parsers import MultiPartParser, FormParser
-from rest_framework.views import APIView
-from rest_framework.exceptions import ValidationError as DRFValidationError
-from django.db import transaction
-from rest_framework.viewsets import ModelViewSet
+import jwt
+from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.db import transaction
 from django.utils.translation import gettext_lazy as _
+from rest_framework import generics, status
+from rest_framework.exceptions import ValidationError as DRFValidationError
+from rest_framework.generics import get_object_or_404
+from rest_framework.parsers import FormParser, MultiPartParser
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.views import APIView
+from rest_framework.viewsets import ModelViewSet
+from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.views import TokenObtainPairView
+
+from catalog.models import Allergen
+from pos.mixins import BiometricValidationMixin
+
+from .mixins import InstitutionScopeMixin, TokenGeneratorMixin
+from .models import CustomUser, Institution, ParentalControl, StudentProfile, UserBiometric
+from .permissions import (
+    CanManageStaffAccount,
+    CanRegisterBiometric,
+    CanRequestPasswordReset,
+    IsAdministrator,
+    IsParentOfStudent,
+    IsParentUser,
+    IsStudentOrTeacherUser,
+    IsTeacherUser,
+    SameInstitutionPermission,
+    get_object_institution_id,
+)
 from .serializers import (
+    AllergenSerializer,
+    ChangePasswordSerializer,
     ChildSerializer,
-    ParentRegistrationSerializer,
-    StudentRegistrationSerializer,
     CreateStaffSerializer,
-    UpdateStaffSerializer,
-    PasswordResetRequestSerializer,
-    PasswordResetConfirmSerializer,
+    EmailTokenObtainSerializer,
     InstitutionSerializer,
     MeSerializer,
-    AllergenSerializer,
-    EmailTokenObtainSerializer,
+    ParentalControlSerializer,
+    ParentRegistrationSerializer,
+    PasswordResetConfirmSerializer,
+    PasswordResetRequestSerializer,
     SetPaymentPinSerializer,
+    StudentRegistrationSerializer,
+    UpdateStaffSerializer,
     VerifyPaymentPinSerializer,
-    ChangePasswordSerializer,
 )
-from .permissions import (
-    IsAdministrator, 
-    IsParentUser, 
-    SameInstitutionPermission, 
-    CanRequestPasswordReset, 
-    CanManageAllergies, 
-    IsParentOfStudent, 
-    CanRegisterBiometric, 
-    IsTeacherUser, 
-    get_object_institution_id,
-    CanManageStaffAccount)
-
-from rest_framework.permissions import SAFE_METHODS
-from .mixins import InstitutionScopeMixin, TokenGeneratorMixin, resolve_write_institution
-from .models import CustomUser, Institution, StudentProfile
 from .services import soft_delete_account
-from catalog.models import Allergen
-from rest_framework_simplejwt.views import TokenObtainPairView
-from rest_framework_simplejwt.tokens import RefreshToken
+
+logger = logging.getLogger(__name__)
 
 
 class StaffViewSet(InstitutionScopeMixin, ModelViewSet):
@@ -68,14 +76,6 @@ class StaffViewSet(InstitutionScopeMixin, ModelViewSet):
         if self.action in ('update', 'partial_update'):
             return UpdateStaffSerializer
         return super().get_serializer_class()
-
-    def get_serializer_context(self):
-        """Writes land in the admin's target institution (?institution=<id>,
-        otherwise their own sede), see resolve_write_institution."""
-        context = super().get_serializer_context()
-        if self.request.method not in SAFE_METHODS:
-            context['institution'] = resolve_write_institution(self.request)
-        return context
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -124,8 +124,9 @@ class RequestPasswordResetView(TokenGeneratorMixin, BasePasswordResetView):
 
     def process_recovery_action(self, serializer):
         email = serializer.validated_data['email']
-        user = get_user_model().objects.get(email=email, is_active=True)
-        self.generate_and_send_token(user, email)
+        user = get_user_model().objects.filter(email=email, is_active=True).first()
+        if user is not None:
+            self.generate_and_send_token(user, email)
 
 
 class ConfirmPasswordResetView(BasePasswordResetView):
@@ -200,7 +201,7 @@ class ChildPhotoUpdateView(APIView):
     def patch(self, request, student_id):
         student_profile = get_object_or_404(StudentProfile, pk=student_id)
         if 'profile_picture' not in request.FILES:
-            return Response({'error': 'No se envió ninguna imagen.'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': _('No se envió ninguna imagen.')}, status=status.HTTP_400_BAD_REQUEST)
 
         photo = request.FILES['profile_picture']
 
@@ -305,7 +306,7 @@ class SetPaymentPinView(APIView):
         serializer = SetPaymentPinSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         request.user.parent_profile.set_payment_pin(serializer.validated_data['pin'])
-        return Response({'detail': 'PIN actualizado correctamente.'})
+        return Response({'detail': _('PIN actualizado correctamente.')})
 
 
 class VerifyPaymentPinView(APIView):
@@ -319,12 +320,10 @@ class VerifyPaymentPinView(APIView):
         serializer.is_valid(raise_exception=True)
         is_valid = request.user.parent_profile.check_payment_pin(serializer.validated_data['pin'])
         return Response({'valid': is_valid})
-from .models import ParentalControl
-from .serializers import ParentalControlSerializer
 
 class ParentalControlView(generics.RetrieveUpdateAPIView):
     serializer_class = ParentalControlSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsParentUser]
 
     def get_object(self):
         student_id = self.kwargs.get('student_id')
@@ -332,15 +331,6 @@ class ParentalControlView(generics.RetrieveUpdateAPIView):
         obj, created = ParentalControl.objects.get_or_create(student=student)
         return obj
 
-
-import jwt
-import uuid
-from datetime import datetime, timezone, timedelta
-from django.conf import settings
-from rest_framework.parsers import MultiPartParser, FormParser
-from .models import UserBiometric
-from .permissions import IsStudentOrTeacherUser
-from pos.mixins import BiometricValidationMixin
 
 class DynamicQrTokenView(APIView):
     """
@@ -428,8 +418,14 @@ class RegisterBiometricView(BiometricValidationMixin, APIView):
         # 1. Extract embedding vector (wipes raw frame memory)
         try:
             vector = self.extract_face_embedding(photo)
-        except Exception as e:
-            return Response({"detail": f"Error al extraer rasgos biométricos: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+        except DRFValidationError:
+            raise
+        except Exception:
+            logger.exception("[BIOMETRIC] Error extracting facial features for user %s", target_user.pk)
+            return Response(
+                {"detail": _("No se pudieron extraer los rasgos biométricos de la fotografía.")},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         # 2. Encrypt vector with AES-256-GCM
         ciphertext, nonce, tag = self.encrypt_embedding(vector)
