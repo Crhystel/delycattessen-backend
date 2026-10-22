@@ -96,6 +96,7 @@ Solicitar código → generar (`secrets`) → enviar por correo (Celery) → con
 - **Services**: la lógica de negocio vive en `services.py` de cada app; las vistas solo validan la entrada, llaman al servicio y arman la respuesta.
 - **Aislamiento multi-institución**: un usuario solo ve y escribe datos de su institución; el administrador puede ampliar con `?institution=<id>` o `?institution=all` (solo lectura consolidada).
 - **Soft delete** de cuentas (`soft_delete_account`): se conserva el historial de ventas y se borran datos personales y biometría.
+- **Datos sensibles** (foto, biometría, alergias, contraseña): solo los maneja el dueño de la cuenta; el administrador nunca los toca (`CanRegisterBiometric`). El administrador gestiona al personal operativo por completo y, de los docentes, solo activa/desactiva (y corrige o elimina los pendientes de activación) según `CanManageStaffAccount`.
 - **Deuda conocida**: los campos de nombre usan `first_name`, `second_name`, `last_name`, `second_last_name` (heredados de `AbstractUser`); el estándar del proyecto es `first_name`, `middle_name`, `first_last_name`, `second_last_name`. Renombrarlos requiere migración y revisar API y clientes.
 
 ## 7. Configuración
