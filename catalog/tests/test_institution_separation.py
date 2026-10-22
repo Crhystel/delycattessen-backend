@@ -261,15 +261,20 @@ class InstitutionSeparationTests(APITestCase):
         self.assertEqual(self._register(self.parent_user, self.student_a_user).status_code, 201)
         self.assertEqual(self._register(self.parent_user, self.student_b_user).status_code, 403)
 
-    def test_admin_registers_only_teachers_of_own_sede(self):
-        self.assertEqual(self._register(self.admin_a, self.teacher_a).status_code, 201)
+    def test_teacher_registers_only_own_biometrics(self):
+        self.assertEqual(self._register(self.teacher_a, self.teacher_a).status_code, 201)
+        self.assertEqual(self._register(self.teacher_a, self.teacher_b).status_code, 403)
+
+    def test_admin_never_registers_biometrics_of_teachers(self):
+        self.assertEqual(self._register(self.admin_a, self.teacher_a).status_code, 403)
         self.assertEqual(self._register(self.admin_a, self.teacher_b).status_code, 403)
+        self.assertFalse(UserBiometric.objects.filter(user=self.teacher_a).exists())
 
     def test_biometrics_denied_for_other_roles_and_actors(self):
         self.assertEqual(self._register(self.admin_a, self.student_a_user).status_code, 403)
         self.assertEqual(self._register(self.staff_a, self.teacher_a).status_code, 403)
         self.assertEqual(self._register(self.admin_a, self.staff_a).status_code, 403)
-        self.assertEqual(self._register(self.teacher_a, self.teacher_a).status_code, 403)
+        self.assertEqual(self._register(self.staff_a, self.staff_a).status_code, 403)
         self.assertFalse(UserBiometric.objects.filter(user=self.staff_a).exists())
 
     def test_match_face_requires_institution(self):

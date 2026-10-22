@@ -44,9 +44,10 @@ class SameInstitutionAsTarget(BasePermission):
 
 
 class CanRegisterBiometric(BasePermission):
-    """Face biometrics exist only for students and teachers. A parent
-    registers their own children; an admin registers teachers of their own
-    institution. Nobody else (staff, other roles) can register biometrics."""
+    """Face biometrics exist only for students and teachers and are sensitive
+    data owned by the account holder: a parent registers their own children and
+    a teacher registers only themself. The admin never touches them; nobody
+    else (staff, other roles) can register biometrics."""
     message = _('No tiene permiso para registrar la biometría de este usuario.')
 
     def has_object_permission(self, request, view, obj):
@@ -59,11 +60,7 @@ class CanRegisterBiometric(BasePermission):
                 and profile.parent.user_id == user.id
             )
         if obj.role == CustomUser.Role.TEACHER:
-            return bool(
-                user.role == CustomUser.Role.ADMIN
-                and user.institution_id is not None
-                and obj.institution_id == user.institution_id
-            )
+            return user.role == CustomUser.Role.TEACHER and obj.id == user.id
         return False
 
 

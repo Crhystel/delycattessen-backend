@@ -56,6 +56,16 @@ class StaffManagementTests(APITestCase):
         self.operative.refresh_from_db()
         self.assertEqual(self.operative.first_name, 'LUIS')
 
+    def test_admin_cannot_touch_sensitive_data(self):
+        old_hash = self.operative.password
+        response = self.client.patch(
+            self._url(self.operative), {'password': 'Nueva1234!', 'allergies': [1]}, format='json',
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.operative.refresh_from_db()
+        self.assertEqual(self.operative.password, old_hash)
+        self.assertFalse(self.operative.allergies.exists())
+
     def test_operative_role_cannot_change(self):
         response = self.client.patch(
             self._url(self.operative), {'role': CustomUser.Role.TEACHER}, format='json',
