@@ -23,6 +23,7 @@ class PreOrder(models.Model):
     class Meta:
         verbose_name = _('pre-order')
         verbose_name_plural = _('pre-orders')
+        indexes = [models.Index(fields=['created_at'])]
 
     def __str__(self):
         return f'PreOrder {self.id} for {self.student.user.username}'
@@ -73,7 +74,10 @@ class Sale(models.Model):
         verbose_name = _('sale')
         verbose_name_plural = _('sales')
         ordering = ['-created_at']
-        indexes = [models.Index(fields=['customer', 'created_at'])]
+        indexes = [
+            models.Index(fields=['customer', 'created_at']),
+            models.Index(fields=['institution', 'created_at']),
+        ]
         constraints = [
             models.CheckConstraint(
                 condition=models.Q(payment_method='CASH') | models.Q(customer__isnull=False),

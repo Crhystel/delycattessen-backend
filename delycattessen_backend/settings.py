@@ -232,6 +232,11 @@ QR_TOKEN_TTL_SECONDS = config('QR_TOKEN_TTL_SECONDS', default=300, cast=int)
 # Dynamic QR: a used nonce is remembered slightly longer than the 5-minute token life.
 QR_NONCE_TTL_SECONDS = config('QR_NONCE_TTL_SECONDS', default=360, cast=int)
 
+# Sales analytics (admin dashboard): longest date range a request may ask for, and
+# how many products each "top products" ranking returns.
+ANALYTICS_MAX_RANGE_DAYS = config('ANALYTICS_MAX_RANGE_DAYS', default=366, cast=int)
+ANALYTICS_TOP_PRODUCTS_LIMIT = config('ANALYTICS_TOP_PRODUCTS_LIMIT', default=10, cast=int)
+
 # Shared cache (password-reset codes, QR nonces). Without REDIS_URL Django keeps
 # its default per-process memory cache.
 REDIS_URL = config('REDIS_URL', default='')
