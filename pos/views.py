@@ -13,15 +13,19 @@ from core.biometrics import BiometricValidationMixin
 from core.mixins import resolve_institution_scope, resolve_write_institution
 from core.timezone import local_now
 from users.models import CustomUser
-from users.permissions import IsOperativeUser, IsParentUser, IsTeacherUser, SameInstitutionAsTarget
+from users.permissions import (
+    IsAdministrator, IsOperativeUser, IsParentUser, IsTeacherUser, SameInstitutionAsTarget,
+)
 from users.services import QrTokenExpired, QrTokenInvalid, decode_qr_token
 
 from .models import PreOrder, Sale
 from .serializers import (
-    ParentSaleSerializer, PreOrderCreateSerializer, PreOrderListSerializer, SaleCreateSerializer, SaleSerializer,
+    AnalyticsQuerySerializer, AnalyticsTimeseriesQuerySerializer, ParentSaleSerializer, PreOrderCreateSerializer,
+    PreOrderListSerializer, SaleCreateSerializer, SaleSerializer,
 )
 from .services import (
     PreOrderCreator,
+    SalesAnalytics,
     build_identified_user_payload,
     consume_qr_nonce,
     deliver_preorder,
@@ -280,3 +284,46 @@ class ParentSaleListView(generics.ListAPIView):
             queryset = queryset.filter(customer__student_profile__id=student_id)
 
         return queryset.order_by('-created_at')[:self.max_results]
+
+
+class BaseAnalyticsView(APIView):
+    """
+    Template Method for the admin sales analytics: the flow (validate the date
+    range -> resolve the institution scope -> build the metric) is fixed and
+    each subclass only says which metric to build. The scope is the admin's own
+    institution, ?institution=<id> or ?institution=all (consolidated).
+    """
+    permission_classes = [IsAuthenticated, IsAdministrator]
+    query_serializer_class = AnalyticsQuerySerializer
+
+    def build(self, analytics, params):
+        raise NotImplementedError
+
+    def get(self, request):
+        serializer = self.query_serializer_class(data=request.query_params)
+        serializer.is_valid(raise_exception=True)
+        params = serializer.validated_data
+        analytics = SalesAnalytics(resolve_institution_scope(request), params['date_from'], params['date_to'])
+        return Response(self.build(analytics, params))
+
+
+class SalesSummaryView(BaseAnalyticsView):
+    """GET /api/pos/analytics/summary/ - KPIs and channels against the previous period."""
+
+    def build(self, analytics, params):
+        return analytics.summary()
+
+
+class SalesTimeseriesView(BaseAnalyticsView):
+    """GET /api/pos/analytics/timeseries/?granularity=day|week|month - revenue per bucket and channel."""
+    query_serializer_class = AnalyticsTimeseriesQuerySerializer
+
+    def build(self, analytics, params):
+        return analytics.timeseries(params['granularity'])
+
+
+class TopProductsView(BaseAnalyticsView):
+    """GET /api/pos/analytics/top-products/ - rankings by revenue and by units."""
+
+    def build(self, analytics, params):
+        return analytics.top_products()
