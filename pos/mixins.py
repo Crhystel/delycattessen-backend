@@ -248,6 +248,7 @@ class BiometricValidationMixin:
         institution=None,
         all_institutions: bool = False,
         exclude_user=None,
+        active_users_only: bool = False,
     ):
         """
         Cosine similarity between the candidate and every active biometric of
@@ -274,6 +275,8 @@ class BiometricValidationMixin:
             )
         if exclude_user is not None:
             qs = qs.exclude(user=exclude_user)
+        if active_users_only:
+            qs = qs.filter(user__is_active=True)
 
         biometrics = list(
             qs.select_related('user').only(
@@ -316,6 +319,7 @@ class BiometricValidationMixin:
         institution=None,
         threshold: float = 0.40,
         all_institutions: bool = False,
+        
     ):
         """
         Matches a candidate embedding against the registered biometrics of the
@@ -329,6 +333,7 @@ class BiometricValidationMixin:
 
         users, similarities = self._score_candidates(
             candidate_embedding, institution=institution, all_institutions=all_institutions,
+            active_users_only=True,
         )
         if not users:
             return None, -1.0

@@ -20,7 +20,10 @@ class InstitutionScopeTests(APITestCase):
             username="staff_b", email="staff_b@delycattessen.com",
             password="test1234", role=CustomUser.Role.TEACHER, institution=self.institution_b
         )
-
+        self.operative_b = CustomUser.objects.create_user(
+            username="operative_b", email="operative_b@delycattessen.com",
+            password="test1234", role=CustomUser.Role.OPERATIONS_STAFF, institution=self.institution_b
+        )
     def _auth(self, user):
         token = RefreshToken.for_user(user)
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token.access_token}')
@@ -92,9 +95,9 @@ class InstitutionScopeTests(APITestCase):
         self.assertEqual(self._create_teacher('bad@delycattessen.com', '?institution=9999').status_code, 400)
 
     def test_admin_edits_and_deletes_other_sede_staff_only_when_targeting_it(self):
-        """Case: PATCH/DELETE on another sede's user needs ?institution=<id>."""
+        """Case: PATCH/DELETE on another sede's operative needs ?institution=<id>."""
         self._auth(self.admin_a)
-        url = f'/api/users/staff/{self.staff_b.id}/'
+        url = f'/api/users/staff/{self.operative_b.id}/'
         for suffix in ('', '?institution=all'):
             self.assertEqual(self.client.patch(url + suffix, {'first_name': 'X'}, format='json').status_code, 404)
             self.assertEqual(self.client.delete(url + suffix).status_code, 404)

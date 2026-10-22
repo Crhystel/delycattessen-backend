@@ -17,6 +17,7 @@ from .serializers import (
     ParentRegistrationSerializer,
     StudentRegistrationSerializer,
     CreateStaffSerializer,
+    UpdateStaffSerializer,
     PasswordResetRequestSerializer,
     PasswordResetConfirmSerializer,
     InstitutionSerializer,
@@ -27,10 +28,22 @@ from .serializers import (
     VerifyPaymentPinSerializer,
     ChangePasswordSerializer,
 )
-from .permissions import IsAdministrator, IsParentUser, SameInstitutionPermission, CanRequestPasswordReset, CanManageAllergies, IsParentOfStudent, CanRegisterBiometric, IsTeacherUser, get_object_institution_id
+from .permissions import (
+    IsAdministrator, 
+    IsParentUser, 
+    SameInstitutionPermission, 
+    CanRequestPasswordReset, 
+    CanManageAllergies, 
+    IsParentOfStudent, 
+    CanRegisterBiometric, 
+    IsTeacherUser, 
+    get_object_institution_id,
+    CanManageStaffAccount)
+
 from rest_framework.permissions import SAFE_METHODS
 from .mixins import InstitutionScopeMixin, TokenGeneratorMixin, resolve_write_institution
 from .models import CustomUser, Institution, StudentProfile
+from .services import soft_delete_account
 from catalog.models import Allergen
 from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -38,14 +51,23 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 class StaffViewSet(InstitutionScopeMixin, ModelViewSet):
     """
-    Allows the Administrator to create, list, and view staff
-    (Teachers and Operations Staff), with cross-institution scope.
+    The Administrator manages the staff accounts of their institution(s):
+    - Operations staff: full management (create, edit, activate/deactivate, delete).
+    - Teachers: created and (de)activated by the admin; the teacher owns the rest
+      of the profile (see CanManageStaffAccount).
+    Deleting is always a soft delete (see soft_delete_account).
     """
     serializer_class = CreateStaffSerializer
-    permission_classes = [IsAuthenticated, IsAdministrator, SameInstitutionPermission]
+    permission_classes = [IsAuthenticated, IsAdministrator, SameInstitutionPermission, CanManageStaffAccount]
     queryset = CustomUser.objects.filter(
-        role__in=[CustomUser.Role.TEACHER, CustomUser.Role.OPERATIONS_STAFF]
+        role__in=[CustomUser.Role.TEACHER, CustomUser.Role.OPERATIONS_STAFF],
+        deleted_at__isnull=True,
     )
+
+    def get_serializer_class(self):
+        if self.action in ('update', 'partial_update'):
+            return UpdateStaffSerializer
+        return super().get_serializer_class()
 
     def get_serializer_context(self):
         """Writes land in the admin's target institution (?institution=<id>,
@@ -69,6 +91,11 @@ class StaffViewSet(InstitutionScopeMixin, ModelViewSet):
             },
             status=status.HTTP_201_CREATED
         )
+
+    def perform_destroy(self, instance):
+        soft_delete_account(instance)
+        
+        
 class InstitutionListView(generics.ListAPIView):
     serializer_class = InstitutionSerializer
     permission_classes = [IsAuthenticated]

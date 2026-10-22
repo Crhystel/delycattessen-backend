@@ -1,4 +1,4 @@
-from rest_framework.permissions import BasePermission
+from rest_framework.permissions import BasePermission, SAFE_METHODS
 from django.utils.translation import gettext_lazy as _
 from .models import CustomUser, StudentProfile
 
@@ -161,3 +161,21 @@ class IsStudentOrTeacherUser(BasePermission):
             and request.user.is_authenticated
             and request.user.role in [CustomUser.Role.STUDENT, CustomUser.Role.TEACHER]
         )
+class CanManageStaffAccount(BasePermission):
+    """Object-level policy for what an admin may do to a staff account.
+    - Operations staff: full management (edit, activate/deactivate, delete).
+    - Teacher: the teacher owns the profile. The admin may only (de)activate the
+      account, except while it is still pending activation (must_change_password
+      is True): nothing to protect yet, so the admin may also correct its data
+      or remove it."""
+    message = _('El perfil de un docente lo gestiona el propio docente. Solo puede activar o desactivar su cuenta.')
+
+    def has_object_permission(self, request, view, obj):
+        if request.method in SAFE_METHODS or obj.role != CustomUser.Role.TEACHER:
+            return True
+        if obj.must_change_password:
+            return True
+        if request.method == 'DELETE':
+            self.message = _('Un docente activo gestiona su propia cuenta. Puede desactivarla, no eliminarla.')
+            return False
+        return set(request.data.keys()) <= {'is_active'}

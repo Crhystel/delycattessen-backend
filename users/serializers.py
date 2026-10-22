@@ -41,8 +41,9 @@ class CreateStaffSerializer(UppercaseNamesMixin, serializers.ModelSerializer):
         model = User
         fields = (
             'id', 'email', 'first_name', 'second_name', 'last_name', 'second_last_name',
-            'role', 'institution_id', 'institution_name', 'is_active',
+            'role', 'institution_id', 'institution_name', 'is_active', 'must_change_password',
         )
+        read_only_fields = ('must_change_password',)
         extra_kwargs = {
             'email': {'required': True},
             'first_name': {'required': True},
@@ -54,6 +55,7 @@ class CreateStaffSerializer(UppercaseNamesMixin, serializers.ModelSerializer):
 
     def validate_email(self, value):
         return value.lower()
+
     @transaction.atomic
     def create(self, validated_data: dict) -> User:
         request = self.context.get('request')
@@ -85,6 +87,37 @@ class CreateStaffSerializer(UppercaseNamesMixin, serializers.ModelSerializer):
         user._temporary_password = temporary_password
         return user
 
+
+class UpdateStaffSerializer(UppercaseNamesMixin, serializers.ModelSerializer):
+    """Edit of a staff account by the admin. Role and institution never change.
+    The email of an account that already activated can only change through the
+    owner's verification flow, so here it is accepted only while the account is
+    still pending activation (the admin is correcting a typo)."""
+    uppercase_fields = ('first_name', 'second_name', 'last_name', 'second_last_name')
+    role = serializers.CharField(read_only=True)
+    institution_name = serializers.CharField(source='institution.name', read_only=True)
+
+    class Meta:
+        model = User
+        fields = (
+            'id', 'email', 'first_name', 'second_name', 'last_name', 'second_last_name',
+            'role', 'institution_name', 'is_active', 'must_change_password',
+        )
+        read_only_fields = ('must_change_password',)
+
+    def validate_email(self, value):
+        value = value.lower()
+        if value != self.instance.email and not self.instance.must_change_password:
+            raise serializers.ValidationError(
+                _('El correo de una cuenta activa solo puede cambiarse con verificación del propietario.')
+            )
+        return value
+
+    def update(self, instance, validated_data):
+        if 'email' in validated_data:
+            # Staff accounts use the email as username (see CreateStaffSerializer).
+            validated_data['username'] = validated_data['email']
+        return super().update(instance, validated_data)
 
 class PasswordResetRequestSerializer(serializers.Serializer):
     email = serializers.EmailField()

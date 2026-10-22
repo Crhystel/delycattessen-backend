@@ -46,6 +46,10 @@ class CustomUser(AbstractUser):
         'catalog.Allergen', verbose_name=_('allergies'), blank=True, related_name='teachers',
         help_text=_('Aplica únicamente a Docentes')
     )
+    deleted_at = models.DateTimeField(
+        _('deleted at'), null=True, blank=True,
+        help_text=_('Eliminación lógica: la cuenta se conserva para el historial pero ya no existe para el sistema.')
+    )
     EMAIL_FIELD = 'email'
 
     def __str__(self) -> str:
