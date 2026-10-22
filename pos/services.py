@@ -1,15 +1,17 @@
+from datetime import datetime, time, timedelta
 from decimal import Decimal
 
 from django.conf import settings
 from django.core.cache import cache
 from django.db import transaction
-from django.db.models import Sum
+from django.db.models import Count, DecimalField, ExpressionWrapper, F, Sum
+from django.db.models.functions import TruncDate, TruncMonth, TruncWeek
 from django.utils.translation import gettext_lazy as _
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from catalog.models import DailyMenu, MenuItem, MonthlyMenu
 from catalog.services import PromotionService
-from core.timezone import local_now, local_today
+from core.timezone import LOCAL_TIMEZONE, local_now, local_today
 from users.models import CustomUser, StudentProfile
 from users.permissions import get_object_institution_id
 from wallet.services import debit_wallet
@@ -325,3 +327,241 @@ def build_identified_user_payload(user, method):
         'pending_orders': pending_orders,
         'identification_method': method,
     }
+
+
+CHANNEL_PREORDER = 'PREORDER'
+# Sales channels shown on the dashboard, in display order: the three POS payment
+# methods plus pre-orders (always paid from the wallet when they are created).
+CHANNELS = (
+    Sale.PaymentMethod.CASH.value,
+    Sale.PaymentMethod.WALLET.value,
+    Sale.PaymentMethod.CREDIT.value,
+    CHANNEL_PREORDER,
+)
+GRANULARITIES = ('day', 'week', 'month')
+_ZERO = Decimal('0.00')
+_TRUNC_BY_GRANULARITY = {'day': TruncDate, 'week': TruncWeek, 'month': TruncMonth}
+_LINE_TOTAL = ExpressionWrapper(
+    F('quantity') * F('price_at_purchase'),
+    output_field=DecimalField(max_digits=12, decimal_places=2),
+)
+
+
+def _money(value):
+    return str(Decimal(value).quantize(_ZERO))
+
+
+def _change_pct(current, previous):
+    """Percentage change against the previous period; None when there is nothing to compare."""
+    if not previous:
+        return None
+    return round(float((Decimal(current) - Decimal(previous)) / Decimal(previous) * 100), 1)
+
+
+def _local_day_start(day):
+    return datetime.combine(day, time.min, tzinfo=LOCAL_TIMEZONE)
+
+
+def _bucket_start(day, granularity):
+    if granularity == 'week':
+        return day - timedelta(days=day.weekday())
+    if granularity == 'month':
+        return day.replace(day=1)
+    return day
+
+
+def _next_bucket_start(start, granularity):
+    if granularity == 'week':
+        return start + timedelta(days=7)
+    if granularity == 'month':
+        return (start.replace(day=28) + timedelta(days=4)).replace(day=1)
+    return start + timedelta(days=1)
+
+
+class SalesAnalytics:
+    """
+    Read-only sales metrics for the admin dashboard over an inclusive range of
+    local dates. `institution=None` consolidates every institution.
+
+    Revenue is every Sale (POS: cash, wallet, credit) plus every pre-order that
+    is not canceled, counted when it is created. Wallet consumption transactions
+    are not added (they duplicate the sale) and recharges are not revenue.
+    Days are cut in the business time zone, not in UTC.
+    """
+
+    def __init__(self, institution, date_from, date_to):
+        self.institution = institution
+        self.date_from = date_from
+        self.date_to = date_to
+        days = (date_to - date_from).days + 1
+        self.previous_to = date_from - timedelta(days=1)
+        self.previous_from = self.previous_to - timedelta(days=days - 1)
+
+    # ---- querysets ------------------------------------------------------
+    @staticmethod
+    def _bounds(date_from, date_to):
+        return _local_day_start(date_from), _local_day_start(date_to + timedelta(days=1))
+
+    def _sales(self, date_from, date_to):
+        start, end = self._bounds(date_from, date_to)
+        sales = Sale.objects.filter(created_at__gte=start, created_at__lt=end)
+        if self.institution is not None:
+            sales = sales.filter(institution=self.institution)
+        return sales
+
+    def _preorders(self, date_from, date_to):
+        start, end = self._bounds(date_from, date_to)
+        preorders = PreOrder.objects.filter(created_at__gte=start, created_at__lt=end).exclude(
+            status=PreOrder.Status.CANCELED,
+        )
+        if self.institution is not None:
+            preorders = preorders.filter(student__institution=self.institution)
+        return preorders
+
+    # ---- summary --------------------------------------------------------
+    def _channel_totals(self, date_from, date_to):
+        totals = {channel: {'amount': _ZERO, 'count': 0} for channel in CHANNELS}
+        rows = self._sales(date_from, date_to).order_by().values('payment_method').annotate(
+            amount=Sum('total_amount'), count=Count('id'),
+        )
+        for row in rows:
+            totals[row['payment_method']] = {'amount': row['amount'], 'count': row['count']}
+        preorders = self._preorders(date_from, date_to).aggregate(amount=Sum('total_amount'), count=Count('id'))
+        totals[CHANNEL_PREORDER] = {'amount': preorders['amount'] or _ZERO, 'count': preorders['count']}
+        return totals
+
+    def _window(self, date_from, date_to):
+        channels = self._channel_totals(date_from, date_to)
+        revenue = sum((data['amount'] for data in channels.values()), _ZERO)
+        transactions = sum(data['count'] for data in channels.values())
+        average_ticket = revenue / transactions if transactions else _ZERO
+        return {
+            'channels': channels,
+            'revenue': revenue,
+            'transactions': transactions,
+            'average_ticket': average_ticket,
+        }
+
+    @staticmethod
+    def _kpi(current, previous, fmt=lambda value: value):
+        return {'current': fmt(current), 'previous': fmt(previous), 'change_pct': _change_pct(current, previous)}
+
+    def summary(self):
+        current = self._window(self.date_from, self.date_to)
+        previous = self._window(self.previous_from, self.previous_to)
+        revenue = current['revenue']
+        channels = []
+        for channel in CHANNELS:
+            now, before = current['channels'][channel], previous['channels'][channel]
+            channels.append({
+                'channel': channel,
+                'amount': _money(now['amount']),
+                'count': now['count'],
+                'share_pct': round(float(now['amount'] / revenue * 100), 1) if revenue else 0.0,
+                'previous_amount': _money(before['amount']),
+                'change_pct': _change_pct(now['amount'], before['amount']),
+            })
+        return {
+            'period': {'date_from': self.date_from, 'date_to': self.date_to},
+            'previous_period': {'date_from': self.previous_from, 'date_to': self.previous_to},
+            'kpis': {
+                'revenue': self._kpi(revenue, previous['revenue'], _money),
+                'transactions': self._kpi(current['transactions'], previous['transactions']),
+                'average_ticket': self._kpi(current['average_ticket'], previous['average_ticket'], _money),
+            },
+            'channels': channels,
+        }
+
+    # ---- time series ----------------------------------------------------
+    def _bucket_rows(self, queryset, granularity, group_by):
+        bucket = _TRUNC_BY_GRANULARITY[granularity]('created_at', tzinfo=LOCAL_TIMEZONE)
+        return queryset.order_by().annotate(bucket=bucket).values('bucket', *group_by).annotate(
+            amount=Sum('total_amount'), count=Count('id'),
+        )
+
+    @staticmethod
+    def _as_local_date(value):
+        return value.astimezone(LOCAL_TIMEZONE).date() if isinstance(value, datetime) else value
+
+    def timeseries(self, granularity):
+        """One entry per day/week/month of the range (empty ones included), with
+        the amount per channel and the exact date range of the bucket so the
+        dashboard can drill down by asking for that range."""
+        buckets = {}
+        start = _bucket_start(self.date_from, granularity)
+        while start <= self.date_to:
+            end = _next_bucket_start(start, granularity) - timedelta(days=1)
+            buckets[start] = {
+                'bucket_start': start,
+                'date_from': max(start, self.date_from),
+                'date_to': min(end, self.date_to),
+                'revenue': _ZERO,
+                'transactions': 0,
+                'channels': {channel: _ZERO for channel in CHANNELS},
+            }
+            start = _next_bucket_start(start, granularity)
+
+        sales = self._bucket_rows(self._sales(self.date_from, self.date_to), granularity, ('payment_method',))
+        preorders = self._bucket_rows(self._preorders(self.date_from, self.date_to), granularity, ())
+        for rows, channel_of in ((sales, lambda row: row['payment_method']), (preorders, lambda row: CHANNEL_PREORDER)):
+            for row in rows:
+                entry = buckets[self._as_local_date(row['bucket'])]
+                entry['channels'][channel_of(row)] += row['amount']
+                entry['revenue'] += row['amount']
+                entry['transactions'] += row['count']
+
+        return [
+            {
+                **entry,
+                'revenue': _money(entry['revenue']),
+                'channels': {channel: _money(amount) for channel, amount in entry['channels'].items()},
+            }
+            for entry in buckets.values()
+        ]
+
+    # ---- top products ---------------------------------------------------
+    def _product_totals(self):
+        """Units and revenue per product name, POS items and pre-order dishes
+        together (they are different tables but the same dish to the admin)."""
+        start, end = self._bounds(self.date_from, self.date_to)
+        sale_items = SaleItem.objects.filter(sale__created_at__gte=start, sale__created_at__lt=end)
+        preorder_items = PreOrderItem.objects.filter(
+            pre_order__created_at__gte=start, pre_order__created_at__lt=end,
+        ).exclude(pre_order__status=PreOrder.Status.CANCELED)
+        if self.institution is not None:
+            sale_items = sale_items.filter(sale__institution=self.institution)
+            preorder_items = preorder_items.filter(pre_order__student__institution=self.institution)
+
+        rows = list(
+            sale_items.order_by().values(name=F('menu_item__name')).annotate(
+                units=Sum('quantity'), revenue=Sum(_LINE_TOTAL),
+            )
+        ) + list(
+            preorder_items.order_by().values(name=F('dish__name')).annotate(
+                units=Sum('quantity'), revenue=Sum(_LINE_TOTAL),
+            )
+        )
+        products = {}
+        for row in rows:
+            product = products.setdefault(
+                row['name'].strip().casefold(), {'name': row['name'].strip(), 'units': 0, 'revenue': _ZERO},
+            )
+            product['units'] += row['units']
+            product['revenue'] += row['revenue']
+        return list(products.values())
+
+    def top_products(self):
+        limit = settings.ANALYTICS_TOP_PRODUCTS_LIMIT
+        products = self._product_totals()
+
+        def ranking(sort_key):
+            ordered = sorted(products, key=sort_key)[:limit]
+            return [
+                {'name': product['name'], 'units': product['units'], 'revenue': _money(product['revenue'])}
+                for product in ordered
+            ]
+
+        return {
+            'by_revenue': ranking(lambda product: (-product['revenue'], product['name'])),
+            'by_units': ranking(lambda product: (-product['units'], product['name'])),
+        }
