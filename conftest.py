@@ -5,6 +5,12 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
+def fast_password_hasher(settings):
+    """PBKDF2 is deliberately slow; tests only need a valid hash, not a strong one."""
+    settings.PASSWORD_HASHERS = ['django.contrib.auth.hashers.MD5PasswordHasher']
+
+
+@pytest.fixture(autouse=True)
 def gateway_settings(settings):
     """Deterministic gateway config so tests never depend on .env values."""
     settings.WALLET_RECHARGE_GATEWAY_THRESHOLD = 5.00

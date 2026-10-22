@@ -1,6 +1,6 @@
 # D'Elycattessen - Backend
 
-Backend del sistema de gestión de ventas y control de servicios alimentarios de D'Elycattessen, desarrollado en Django bajo arquitectura MVC. Este repositorio contiene únicamente el backend (API REST). Los repositorios de la interfaz web (React) y la aplicación móvil (Flutter) son independientes.
+Backend del sistema de gestión de ventas y control de servicios alimentarios de D'Elycattessen, desarrollado en Django con Django REST Framework (la lógica de negocio vive en `services.py` de cada app). Este repositorio contiene únicamente el backend (API REST). Los repositorios de la interfaz web (React) y la aplicación móvil (Flutter) son independientes.
 
 ## Stack técnico
 
@@ -11,6 +11,8 @@ Backend del sistema de gestión de ventas y control de servicios alimentarios de
 - RabbitMQ (cola de mensajería asíncrona)
 - Autenticación con JWT (djangorestframework-simplejwt)
 - Docker (para Redis y RabbitMQ en desarrollo local)
+
+La arquitectura completa (apps, dependencias, flujos y decisiones) está en [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Estructura de apps
 
