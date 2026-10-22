@@ -131,7 +131,7 @@ class InstitutionSeparationTests(APITestCase):
         self.assertEqual(self._create_item('?institution=abc').status_code, 400)
 
     def test_non_admin_write_param_is_ignored(self):
-        from users.mixins import resolve_write_institution
+        from core.mixins import resolve_write_institution
         from rest_framework.test import APIRequestFactory
         from rest_framework.request import Request
         request = Request(APIRequestFactory().post(f'/x/?institution={self.inst_b.id}'))
@@ -248,8 +248,8 @@ class InstitutionSeparationTests(APITestCase):
     # ---- biometrics ----------------------------------------------------
     def _register(self, actor, target):
         self._auth(actor)
-        with mock.patch('users.views.RegisterBiometricView.extract_face_embedding') as extract, \
-                mock.patch('users.views.RegisterBiometricView.encrypt_embedding', return_value=(b'c', b'n', b't')):
+        with mock.patch('core.biometrics.BiometricValidationMixin.extract_face_embedding') as extract, \
+                mock.patch('core.biometrics.BiometricValidationMixin.encrypt_embedding', return_value=(b'c', b'n', b't')):
             extract.return_value = [0.0]
             return self.client.post(
                 '/api/users/biometrics/register/',
@@ -273,7 +273,7 @@ class InstitutionSeparationTests(APITestCase):
         self.assertFalse(UserBiometric.objects.filter(user=self.staff_a).exists())
 
     def test_match_face_requires_institution(self):
-        from pos.mixins import BiometricValidationMixin
+        from core.biometrics import BiometricValidationMixin
         with self.assertRaises(ValueError):
             BiometricValidationMixin().match_face(mock.Mock())
 

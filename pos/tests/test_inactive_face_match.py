@@ -1,7 +1,7 @@
 import numpy as np
 from django.test import TestCase
 
-from pos.mixins import BiometricValidationMixin, FaceAlreadyRegistered
+from core.biometrics import BiometricValidationMixin, FaceAlreadyRegistered
 from users.models import CustomUser, Institution, UserBiometric
 
 

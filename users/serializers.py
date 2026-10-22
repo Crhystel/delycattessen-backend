@@ -1,6 +1,5 @@
 import logging
 import secrets
-import string
 
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
@@ -16,19 +15,11 @@ from .mixins import (
     CODE_TTL_SECONDS, MAX_CODE_ATTEMPTS, UppercaseNamesMixin, reset_attempts_key, reset_code_key,
 )
 from .fields import PasswordField
+from .services import register_student
 
 logger = logging.getLogger(__name__)
 
 User = get_user_model()
-
-
-def generate_temporary_password(length=12):
-    pools = (string.ascii_uppercase, string.ascii_lowercase, string.digits, '!@#$%^&*')
-    chars = [secrets.choice(pool) for pool in pools]
-    alphabet = ''.join(pools)
-    chars += [secrets.choice(alphabet) for idx in range(length - len(chars))]
-    secrets.SystemRandom().shuffle(chars)
-    return ''.join(chars)
 
 
 class CreateStaffSerializer(UppercaseNamesMixin, serializers.ModelSerializer):
@@ -59,37 +50,6 @@ class CreateStaffSerializer(UppercaseNamesMixin, serializers.ModelSerializer):
 
     def validate_email(self, value):
         return value.lower()
-
-    @transaction.atomic
-    def create(self, validated_data: dict) -> User:
-        request = self.context.get('request')
-        admin = request.user
-
-        validated_data.pop('is_active', None)
-        # Priority: explicit institution_id in the body, then the write target
-        # resolved by the view (?institution=<id>), then the admin's own sede.
-        institution = (
-            validated_data.pop('institution', None)
-            or self.context.get('institution')
-            or admin.institution
-        )
-        temporary_password = generate_temporary_password()
-
-        user = User.objects.create_user(
-            username=validated_data['email'],
-            email=validated_data['email'],
-            password=temporary_password,
-            first_name=validated_data['first_name'],
-            second_name=validated_data.get('second_name', ''),
-            last_name=validated_data['last_name'],
-            second_last_name=validated_data.get('second_last_name', ''),
-            role=validated_data['role'],
-            institution=institution,
-            must_change_password=True,
-        )
-
-        user._temporary_password = temporary_password
-        return user
 
 
 class UpdateStaffSerializer(UppercaseNamesMixin, serializers.ModelSerializer):
@@ -266,73 +226,12 @@ class StudentRegistrationSerializer(UppercaseNamesMixin,serializers.Serializer):
         )
         if existing_institution_id and institution and existing_institution_id != institution.id:
             raise serializers.ValidationError({
-                'institution_id': 'No puedes registrar hijos en instituciones diferentes'
+                'institution_id': _('No puedes registrar hijos en instituciones diferentes')
             })
         return attrs
 
     def create(self, validated_data):
-        from pos.mixins import BiometricValidationMixin
-        parent_profile = self.context['parent_profile']
-        institution = validated_data['institution']
-
-        # Extract the face first: a face already registered to someone else of
-        # the institution rejects the registration (409) before anything is created.
-        vector = None
-        photo = validated_data['profile_picture']
-        mixin = BiometricValidationMixin()
-        try:
-            photo.seek(0)
-            vector = mixin.extract_face_embedding(photo)
-        except Exception as e:
-            logger.warning("[BIOMETRIC] Error al extraer embedding facial en registro: %s", str(e))
-        if vector is not None:
-            mixin.ensure_face_not_registered(vector, institution)
-
-        student_user = CustomUser(
-            username=validated_data['username'],
-            email=None,
-            first_name=validated_data['first_name'],
-            second_name=validated_data.get('second_name', ''),
-            last_name=validated_data['first_last_name'],
-            second_last_name=validated_data.get('second_last_name', ''),
-            role=CustomUser.Role.STUDENT,
-        )
-        student_user.set_password(validated_data['password'])
-        student_user.save()
-
-        # Automatic biometric facial vector registration from ORIGINAL profile picture
-        biometric_registered = False
-        photo.seek(0)
-        student_profile = StudentProfile.objects.create(
-            user=student_user,
-            institution=institution,
-            profile_picture=photo,
-            parent=parent_profile,
-        )
-
-        if vector is not None:
-            try:
-                from users.models import UserBiometric
-                ciphertext, nonce, tag = mixin.encrypt_embedding(vector)
-                UserBiometric.objects.update_or_create(
-                    user=student_user,
-                    defaults={
-                        'encrypted_embedding': ciphertext,
-                        'nonce': nonce,
-                        'tag': tag,
-                        'is_active': True,
-                    }
-                )
-                biometric_registered = True
-            except Exception as e:
-                logger.warning("[BIOMETRIC] Error al guardar biometría en registro: %s", str(e))
-
-        student_profile.biometric_registered = biometric_registered
-
-        from wallet.models import Wallet
-        Wallet.objects.create(student=student_profile, low_balance_threshold=5.00)
-
-        return student_profile
+        return register_student(self.context['parent_profile'], validated_data)
 
 
 class ChildSerializer(serializers.ModelSerializer):

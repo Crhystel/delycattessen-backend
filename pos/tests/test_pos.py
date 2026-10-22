@@ -7,7 +7,7 @@ from django.conf import settings
 from rest_framework.test import APIClient
 from rest_framework import status
 from users.models import CustomUser, Institution, UserBiometric
-from pos.mixins import BiometricValidationMixin
+from core.biometrics import BiometricValidationMixin
 
 class BiometricEncryptionTests(TestCase, BiometricValidationMixin):
     def test_aes_gcm_encryption_roundtrip(self):
@@ -518,7 +518,7 @@ class LazyBiometricImportsTests(TestCase):
             "import os, sys, django\n"
             "os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'delycattessen_backend.settings')\n"
             "django.setup()\n"
-            "import delycattessen_backend.urls, pos.mixins\n"
+            "import delycattessen_backend.urls, core.biometrics\n"
             "sys.exit(int('cv2' in sys.modules) + 2 * int('numpy' in sys.modules))\n"
         )
         result = subprocess.run(
@@ -531,7 +531,7 @@ class BiometricModelReuseAndFilteringTests(TestCase, BiometricValidationMixin):
     def test_biometric_models_created_once_on_multiple_calls(self):
         """Verifies that FaceDetectorYN and FaceRecognizerSF are created only once."""
         from unittest.mock import patch, MagicMock
-        import pos.mixins as mixins_module
+        import core.biometrics as mixins_module
 
         # Reset module globals to ensure a clean test
         with mixins_module._BIOMETRIC_LOCK:
@@ -548,7 +548,7 @@ class BiometricModelReuseAndFilteringTests(TestCase, BiometricValidationMixin):
             mock_recognizer.alignCrop.return_value = np.zeros((112, 112, 3), dtype=np.uint8)
             mock_recognizer.feature.return_value = np.ones((1, 128), dtype=np.float32)
 
-            with patch('pos.mixins._get_biometric_model_paths', return_value=('fake_yunet.onnx', 'fake_sface.onnx')), \
+            with patch('core.biometrics._get_biometric_model_paths', return_value=('fake_yunet.onnx', 'fake_sface.onnx')), \
                  patch('cv2.FaceDetectorYN.create', return_value=mock_detector) as mock_create_det, \
                  patch('cv2.FaceRecognizerSF.create', return_value=mock_recognizer) as mock_create_rec:
 
@@ -574,7 +574,7 @@ class BiometricModelReuseAndFilteringTests(TestCase, BiometricValidationMixin):
         """_get_biometric_model_paths must raise FileNotFoundError if onnx models do not exist."""
         import tempfile
         from django.test import override_settings
-        from pos.mixins import _get_biometric_model_paths
+        from core.biometrics import _get_biometric_model_paths
 
         with tempfile.TemporaryDirectory() as empty_dir:
             with override_settings(BASE_DIR=empty_dir):

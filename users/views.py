@@ -1,9 +1,5 @@
 import logging
-import uuid
-from datetime import datetime, timedelta, timezone
 
-import jwt
-from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.utils.translation import gettext_lazy as _
@@ -19,10 +15,11 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
 
 from catalog.models import Allergen
-from pos.mixins import BiometricValidationMixin
 
-from .mixins import InstitutionScopeMixin, TokenGeneratorMixin
-from .models import CustomUser, Institution, ParentalControl, StudentProfile, UserBiometric
+from core.mixins import InstitutionScopeMixin
+
+from .mixins import TokenGeneratorMixin
+from .models import CustomUser, Institution, ParentalControl, StudentProfile
 from .permissions import (
     CanManageStaffAccount,
     CanRegisterBiometric,
@@ -52,7 +49,15 @@ from .serializers import (
     UpdateStaffSerializer,
     VerifyPaymentPinSerializer,
 )
-from .services import soft_delete_account
+from .services import (
+    build_qr_token,
+    create_staff_account,
+    extract_unique_embedding,
+    register_biometric,
+    soft_delete_account,
+    store_embedding,
+    wallet_balance_of,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -80,13 +85,17 @@ class StaffViewSet(InstitutionScopeMixin, ModelViewSet):
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        user = serializer.save()
+        user, temporary_password = create_staff_account(
+            serializer.validated_data,
+            admin=request.user,
+            target_institution=serializer.context.get('institution'),
+        )
         return Response(
             {
                 "message": str(_('%(role)s creado exitosamente.')) % {'role': user.get_role_display()},
                 "email": user.email,
                 "institution": user.institution.name,
-                "temporary_password": user._temporary_password,
+                "temporary_password": temporary_password,
                 "note": str(_('El usuario deberá cambiar esta contraseña en su primer inicio de sesión.'))
             },
             status=status.HTTP_201_CREATED
@@ -207,30 +216,12 @@ class ChildPhotoUpdateView(APIView):
 
         # The new face must be valid and unique BEFORE anything is saved, so the
         # photo and the embedding used by the POS never get out of sync.
-        mixin = BiometricValidationMixin()
-        try:
-            photo.seek(0)
-            vector = mixin.extract_face_embedding(photo)
-            ciphertext, nonce, tag = mixin.encrypt_embedding(vector)
-        except DRFValidationError:
-            raise
-        except Exception:
-            logger.exception("[BIOMETRIC] Error al procesar la foto del estudiante %s", student_id)
-            raise DRFValidationError(_('No se pudo procesar la fotografía para el reconocimiento facial.'))
-        mixin.ensure_face_not_registered(
-            vector, student_profile.institution, exclude_user=student_profile.user,
+        vector = extract_unique_embedding(
+            photo, student_profile.institution, exclude_user=student_profile.user,
         )
 
         with transaction.atomic():
-            UserBiometric.objects.update_or_create(
-                user=student_profile.user,
-                defaults={
-                    'encrypted_embedding': ciphertext,
-                    'nonce': nonce,
-                    'tag': tag,
-                    'is_active': True,
-                }
-            )
+            store_embedding(student_profile.user, vector)
             photo.seek(0)
             student_profile.profile_picture = photo
             student_profile.save()
@@ -335,7 +326,7 @@ class ParentalControlView(generics.RetrieveUpdateAPIView):
 class DynamicQrTokenView(APIView):
     """
     GET /api/users/qr/token/
-    Generates a dynamic, time-sensitive QR token (valid for 300 seconds / 5 minutes)
+    Generates a dynamic, time-sensitive QR token (see QR_TOKEN_TTL_SECONDS)
     for the authenticated student or teacher, preventing spoofing with a single-use nonce.
     Also returns the user's fresh wallet balance and profile summary for the contingency view.
     """
@@ -343,43 +334,21 @@ class DynamicQrTokenView(APIView):
 
     def get(self, request):
         user = request.user
-        now = datetime.now(timezone.utc)
-        ttl_seconds = 300
-        nonce = uuid.uuid4().hex
-
-        payload = {
-            'sub': str(user.id),
-            'user_id': user.id,
-            'username': user.username,
-            'role': user.role,
-            'nonce': nonce,
-            'type': 'pos_dynamic_qr',
-            'iat': now,
-            'exp': now + timedelta(seconds=ttl_seconds),
-        }
-        token = jwt.encode(payload, settings.SECRET_KEY, algorithm='HS256')
-
-        # Balance resolution
-        balance = "0.00"
-        if hasattr(user, 'student_profile') and hasattr(user.student_profile, 'wallet'):
-            balance = str(user.student_profile.wallet.balance)
-        elif hasattr(user, 'wallet'):
-            balance = str(user.wallet.balance)
-
+        token, issued_at, ttl_seconds = build_qr_token(user)
         full_name = f"{user.first_name} {user.last_name}".strip() or user.username
 
         return Response({
             "token": token,
             "expires_in": ttl_seconds,
-            "issued_at": now.isoformat(),
+            "issued_at": issued_at.isoformat(),
             "user_id": user.id,
             "full_name": full_name,
-            "balance": balance,
+            "balance": wallet_balance_of(user),
             "role": user.role,
         })
 
 
-class RegisterBiometricView(BiometricValidationMixin, APIView):
+class RegisterBiometricView(APIView):
     """
     POST /api/users/biometrics/register/
     Registers or updates the biometric facial vector of a student (by their
@@ -415,36 +384,9 @@ class RegisterBiometricView(BiometricValidationMixin, APIView):
         # Template: a single object-level check decides who may register whom.
         self.check_object_permissions(request, target_user)
 
-        # 1. Extract embedding vector (wipes raw frame memory)
-        try:
-            vector = self.extract_face_embedding(photo)
-        except DRFValidationError:
-            raise
-        except Exception:
-            logger.exception("[BIOMETRIC] Error extracting facial features for user %s", target_user.pk)
-            return Response(
-                {"detail": _("No se pudieron extraer los rasgos biométricos de la fotografía.")},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        # 2. Encrypt vector with AES-256-GCM
-        ciphertext, nonce, tag = self.encrypt_embedding(vector)
-
-        # The same face cannot belong to two people of the institution
-        self.ensure_face_not_registered(
-            vector, get_object_institution_id(target_user), exclude_user=target_user,
-        )
-
-        # 3. Store only encrypted vector, nonce, tag
-        UserBiometric.objects.update_or_create(
-            user=target_user,
-            defaults={
-                'encrypted_embedding': ciphertext,
-                'nonce': nonce,
-                'tag': tag,
-                'is_active': True,
-            }
-        )
+        # Extracts the vector (wiping the raw frame), checks the face is not
+        # registered to someone else of the institution and stores it encrypted.
+        register_biometric(target_user, photo, get_object_institution_id(target_user))
 
         return Response({
             "detail": _("Perfil biométrico facial registrado exitosamente con cifrado AES-256."),

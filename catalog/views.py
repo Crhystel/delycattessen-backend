@@ -10,7 +10,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core.timezone import local_today
-from users.mixins import OwnInstitutionMixin, ViewerInstitutionMixin
+from core.mixins import OwnInstitutionMixin, ViewerInstitutionMixin
 from users.models import StudentProfile
 from users.permissions import IsAdministrator, IsOperativeUser, IsParentOfStudent, SameInstitutionAsTarget
 

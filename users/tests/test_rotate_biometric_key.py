@@ -6,7 +6,7 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import TestCase, override_settings
 
-from pos.mixins import BiometricValidationMixin
+from core.biometrics import BiometricValidationMixin
 from users.management.commands.rotate_biometric_key import _PreviousSeedCipher
 from users.models import CustomUser, Institution, UserBiometric
 

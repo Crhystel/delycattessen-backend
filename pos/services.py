@@ -1,18 +1,20 @@
 from decimal import Decimal
 
+from django.conf import settings
+from django.core.cache import cache
 from django.db import transaction
 from django.db.models import Sum
 from django.utils.translation import gettext_lazy as _
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
-from catalog.models import MenuItem
-from core.timezone import local_now
-from users.models import CustomUser
+from catalog.models import DailyMenu, MenuItem, MonthlyMenu
+from core.timezone import local_now, local_today
+from users.models import CustomUser, StudentProfile
 from users.permissions import get_object_institution_id
-from wallet.models import Transaction, Wallet
+from wallet.services import debit_wallet
 
 from .mixins import AllergenValidatorMixin, ParentalControlValidatorMixin
-from .models import Sale, SaleItem
+from .models import PreOrder, PreOrderItem, Sale, SaleItem
 
 
 class SaleProcessor(AllergenValidatorMixin):
@@ -133,23 +135,7 @@ class WalletSaleProcessor(ParentalControlValidatorMixin, SaleProcessor):
         self.validate_parental_controls(self.customer.student_profile, total)
 
     def charge(self, sale):
-        total = sale.total_amount
-        wallet = Wallet.objects.select_for_update().get(student=self.customer.student_profile)
-        if wallet.balance < total:
-            raise ValidationError(
-                _('Saldo insuficiente. Tiene $%(balance)s y el total es $%(total)s') % {
-                    'balance': wallet.balance, 'total': total,
-                }
-            )
-        wallet.balance -= total
-        wallet.save(update_fields=['balance', 'updated_at'])
-        Transaction.objects.create(
-            wallet=wallet,
-            amount=total,
-            status=Transaction.Status.SUCCESS,
-            type=Transaction.Type.CONSUMPTION,
-            sale=sale,
-        )
+        debit_wallet(self.customer.student_profile.wallet, sale.total_amount, sale=sale)
 
 
 PROCESSORS = {
@@ -177,3 +163,162 @@ def monthly_credit_total(customer):
         created_at__gte=month_start_local(),
     ).aggregate(total=Sum('total_amount'))['total']
     return total or Decimal('0.00')
+
+
+class PreOrderCreator(AllergenValidatorMixin, ParentalControlValidatorMixin):
+    """
+    Creates a pre-order for a child of the authenticated parent: checks the
+    delivery date, the published menu, the dishes, parental controls and
+    allergens, then debits the wallet. Everything runs in one transaction.
+    """
+
+    def __init__(self, parent_profile):
+        self.parent_profile = parent_profile
+
+    @transaction.atomic
+    def create(self, student_id, delivery_date, items_data):
+        student = self._get_own_student(student_id)
+
+        if delivery_date <= local_today():
+            raise ValidationError(
+                _("No se puede preordenar para hoy o fechas pasadas. La fecha de entrega debe ser posterior a hoy.")
+            )
+
+        daily_menu = self._get_published_menu(student, delivery_date)
+        order_lines, total_amount = self._build_lines(daily_menu, items_data)
+
+        self.validate_parental_controls(student, total_amount, target_date=delivery_date)
+        self.validate_allergens(student, [dish for dish, _quantity in order_lines])
+
+        pre_order = PreOrder.objects.create(
+            student=student,
+            daily_menu=daily_menu,
+            total_amount=total_amount,
+            status=PreOrder.Status.PENDING,
+        )
+        PreOrderItem.objects.bulk_create([
+            PreOrderItem(pre_order=pre_order, dish=dish, quantity=quantity, price_at_purchase=dish.price)
+            for dish, quantity in order_lines
+        ])
+        debit_wallet(student.wallet, total_amount, pre_order=pre_order)
+        return pre_order
+
+    def _get_own_student(self, student_id):
+        try:
+            student = StudentProfile.objects.select_related('institution', 'wallet', 'parent').get(id=student_id)
+        except StudentProfile.DoesNotExist:
+            raise ValidationError({'student_id': _('Estudiante no encontrado.')})
+        if not self.parent_profile or student.parent_id != self.parent_profile.id:
+            raise PermissionDenied(_('No tienes permiso sobre este estudiante.'))
+        return student
+
+    @staticmethod
+    def _get_published_menu(student, delivery_date):
+        try:
+            return DailyMenu.objects.select_related('monthly_menu').get(
+                date=delivery_date,
+                monthly_menu__institution=student.institution,
+                monthly_menu__status=MonthlyMenu.Status.PUBLISHED,
+            )
+        except DailyMenu.DoesNotExist:
+            raise ValidationError(
+                _("No hay un menú publicado para esa fecha en la institución del estudiante.")
+            )
+
+    @staticmethod
+    def _build_lines(daily_menu, items_data):
+        available_dishes = {dish.id: dish for dish in daily_menu.dishes.filter(is_active=True)}
+        order_lines = []
+        total_amount = Decimal('0.00')
+        for item_data in items_data:
+            dish = available_dishes.get(item_data['dish_id'])
+            if dish is None:
+                raise ValidationError(
+                    _("El platillo solicitado no está disponible en el menú de esa fecha.")
+                )
+            order_lines.append((dish, item_data['quantity']))
+            total_amount += dish.price * item_data['quantity']
+        return order_lines, total_amount
+
+
+def deliver_preorder(pre_order):
+    """Marks a pending pre-order as delivered; only on its own delivery day."""
+    if pre_order.status != PreOrder.Status.PENDING:
+        raise ValidationError({'detail': _("Esta preorden no está pendiente de entrega.")})
+    if pre_order.daily_menu.date != local_today():
+        raise ValidationError({'detail': _("Esta preorden es para el %(date)s, no para hoy.") % {
+            'date': pre_order.daily_menu.date.strftime('%d/%m/%Y'),
+        }})
+    pre_order.status = PreOrder.Status.DELIVERED
+    pre_order.save(update_fields=['status'])
+    return pre_order
+
+
+def consume_qr_nonce(nonce):
+    """Marks a QR nonce as used. False when it was already used (replay)."""
+    return cache.add(f'used_qr_nonce_{nonce}', True, timeout=settings.QR_NONCE_TTL_SECONDS)
+
+
+def build_identified_user_payload(user, method):
+    """Standard summary of an identified person (face or QR) for the POS screen."""
+    balance = '0.00'
+    allergies = [a.name for a in user.allergies.all()]
+    student_id = None
+    institution = user.institution  # staff/teacher institution
+    pending_orders = []
+
+    if hasattr(user, 'student_profile'):
+        student_profile = user.student_profile
+        student_id = student_profile.id
+        allergies = [a.name for a in student_profile.allergies.all()]
+        # A student's institution lives on StudentProfile, not on the
+        # CustomUser itself (that field is only populated for staff).
+        institution = student_profile.institution
+        if hasattr(student_profile, 'wallet'):
+            balance = str(student_profile.wallet.balance)
+
+        pending_preorders = PreOrder.objects.filter(
+            student=student_profile,
+            status=PreOrder.Status.PENDING,
+            daily_menu__date=local_today(),
+        ).select_related('daily_menu').prefetch_related('items__dish').order_by('created_at')
+
+        pending_orders = [
+            {
+                'pre_order_id': pre_order.id,
+                'total_amount': str(pre_order.total_amount),
+                'created_at': pre_order.created_at.isoformat(),
+                'delivery_date': str(pre_order.delivery_date),
+                'items': [
+                    {
+                        'dish_name': item.dish.name,
+                        'quantity': item.quantity,
+                        'price_at_purchase': str(item.price_at_purchase),
+                    }
+                    for item in pre_order.items.all()
+                ],
+            }
+            for pre_order in pending_preorders
+        ]
+    elif hasattr(user, 'wallet'):
+        balance = str(user.wallet.balance)
+
+    # Teachers do not use a wallet: the cashier sees what they owe on credit.
+    credit_accumulated = None
+    if user.role == CustomUser.Role.TEACHER:
+        credit_accumulated = str(monthly_credit_total(user))
+
+    return {
+        'user_id': user.id,
+        'student_id': student_id,
+        'username': user.username,
+        'full_name': f'{user.first_name} {user.last_name}'.strip() or user.username,
+        'role': user.role,
+        'role_display': user.get_role_display(),
+        'institution': institution.name if institution else None,
+        'balance': balance,
+        'credit_accumulated': credit_accumulated,
+        'allergies': sorted(set(allergies)),
+        'pending_orders': pending_orders,
+        'identification_method': method,
+    }

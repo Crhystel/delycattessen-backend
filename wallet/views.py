@@ -5,7 +5,6 @@ import requests
 from django.conf import settings
 from django.http import HttpResponse
 from django.utils.translation import gettext_lazy as _
-from rest_framework import status
 from rest_framework.generics import get_object_or_404
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -16,8 +15,8 @@ from .permissions import HasKushkiWebhookSecret, IsWalletOwnerParent
 from users.permissions import IsParentUser
 
 from .serializers import RechargeGatewayQuerySerializer, RechargeRequestSerializer, TransactionSerializer
-from .services import GatewayError, GatewayRouter, PayphonePreparer
-from .tasks import process_recharge_task, send_recharge_confirmation_email
+from .services import GatewayError, GatewayRouter, PayphonePreparer, RechargeService
+from .tasks import send_recharge_confirmation_email
 
 
 def _is_allowed_redirect_target(url: str) -> bool:
@@ -100,27 +99,13 @@ class WalletRechargeView(APIView):
         document_number = serializer.validated_data.get('document_number')
         phone_number = serializer.validated_data.get('phone_number')
 
-        gateway = GatewayRouter().get_gateway(amount)
-        if gateway.gateway_code == Transaction.Gateway.PAYPHONE:
-            try:
-                result = PayphonePreparer().prepare(wallet, amount)
-            except GatewayError as exc:
-                return Response({'detail': str(exc)}, status=400)
-            return Response(
-                {'transaction_id': result['transaction_id'], 'payment_url': result['payment_url']},
-                status=status.HTTP_200_OK,
+        try:
+            body, http_status = RechargeService().start(
+                wallet, amount, kushki_token, document_type, document_number, phone_number,
             )
-
-        if not kushki_token:
-            return Response({'detail': _('Falta el token de Kushki.')}, status=400)
-
-        process_recharge_task.delay(
-            wallet.id, str(amount), kushki_token, document_type, document_number, phone_number,
-        )
-        return Response(
-            {'detail': _('Recarga recibida, procesando.')},
-            status=status.HTTP_202_ACCEPTED,
-        )
+        except GatewayError as exc:
+            return Response({'detail': str(exc)}, status=400)
+        return Response(body, status=http_status)
 
 
 class PayphoneCallbackView(APIView):

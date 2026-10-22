@@ -227,6 +227,8 @@ BIOMETRIC_AMBIGUITY_MARGIN = config('BIOMETRIC_AMBIGUITY_MARGIN', default=0.02, 
 # Minimum cosine similarity to accept a face match.
 BIOMETRIC_MATCH_THRESHOLD = config('BIOMETRIC_MATCH_THRESHOLD', default=0.40, cast=float)
 
+# Dynamic QR: seconds a token stays valid.
+QR_TOKEN_TTL_SECONDS = config('QR_TOKEN_TTL_SECONDS', default=300, cast=int)
 # Dynamic QR: a used nonce is remembered slightly longer than the 5-minute token life.
 QR_NONCE_TTL_SECONDS = config('QR_NONCE_TTL_SECONDS', default=360, cast=int)
 

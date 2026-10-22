@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from delycattessen_backend.serializer_mixins import LineSummaryMixin
+from core.serializer_mixins import LineSummaryMixin
 from .models import PreOrder, PreOrderItem, Sale
 
 

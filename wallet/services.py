@@ -7,6 +7,7 @@ from django.conf import settings
 from django.db import transaction as db_transaction
 from django.db.models import F
 from django.utils.translation import gettext_lazy as _
+from rest_framework.exceptions import ValidationError
 
 from .models import Transaction, Wallet
 
@@ -16,6 +17,30 @@ def credit_wallet(wallet: Wallet, amount: Decimal) -> None:
     recharge on the same wallet cannot be overwritten."""
     Wallet.objects.filter(pk=wallet.pk).update(balance=F('balance') + amount)
     wallet.refresh_from_db(fields=['balance'])
+
+
+def debit_wallet(wallet: Wallet, amount: Decimal, *, sale=None, pre_order=None) -> Wallet:
+    """Charges `amount` to the wallet (row-locked so concurrent purchases cannot
+    overspend it) and records the CONSUMPTION transaction linked to the sale or
+    pre-order. Raises ValidationError when the balance is not enough."""
+    locked = Wallet.objects.select_for_update().get(pk=wallet.pk)
+    if locked.balance < amount:
+        raise ValidationError(
+            _('Saldo insuficiente. Tiene $%(balance)s y el total es $%(total)s') % {
+                'balance': locked.balance, 'total': amount,
+            }
+        )
+    locked.balance -= amount
+    locked.save(update_fields=['balance', 'updated_at'])
+    Transaction.objects.create(
+        wallet=locked,
+        amount=amount,
+        status=Transaction.Status.SUCCESS,
+        type=Transaction.Type.CONSUMPTION,
+        sale=sale,
+        pre_order=pre_order,
+    )
+    return locked
 
 
 class GatewayError(Exception):
@@ -255,3 +280,23 @@ class PayphonePreparer:
                 transaction.status = Transaction.Status.FAILED
             transaction.save(update_fields=['status'])
             return transaction
+
+
+class RechargeService:
+    """Starts a recharge with whichever gateway handles the amount, so views do
+    not branch per gateway. Returns (body, http_status); raises GatewayError
+    when the recharge cannot start."""
+
+    def start(self, wallet, amount, kushki_token=None, document_type=None, document_number=None, phone_number=None):
+        gateway = GatewayRouter().get_gateway(amount)
+        if gateway.gateway_code == Transaction.Gateway.PAYPHONE:
+            result = PayphonePreparer().prepare(wallet, amount)
+            return {'transaction_id': result['transaction_id'], 'payment_url': result['payment_url']}, 200
+
+        if not kushki_token:
+            raise GatewayError(_('Falta el token de Kushki.'))
+        from .tasks import process_recharge_task
+        process_recharge_task.delay(
+            wallet.id, str(amount), kushki_token, document_type, document_number, phone_number,
+        )
+        return {'detail': _('Recarga recibida, procesando.')}, 202

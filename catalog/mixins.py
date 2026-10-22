@@ -1,40 +1,27 @@
 from django.utils.translation import gettext_lazy as _
 from rest_framework.exceptions import ValidationError
 
-from .models import Ingredient
-
 
 class IngredientValidationMixin:
     # Intercepts validation to ensure the product has ingredients and that an
     # admin confirmed the allergens of every one of them.
     def validate(self, attrs):
-        request = self.context.get('request')
-        if request and request.method in ['POST', 'PUT', 'PATCH']:
-            if request.method == 'PATCH' and 'ingredients' not in request.data:
-                return super().validate(attrs)
-            if hasattr(request.data, 'getlist') and request.data.getlist('ingredients'):
-                ingredients = request.data.getlist('ingredients')
-            else:
-                ingredients = request.data.get('ingredients')
+        # A partial update that leaves the ingredients alone has nothing to check.
+        if self.partial and 'ingredients' not in attrs:
+            return super().validate(attrs)
 
-            if not isinstance(ingredients, (list, tuple, set)):
-                ingredients = [ingredients] if ingredients is not None else []
+        ingredients = attrs.get('ingredients') or []
+        if not ingredients:
+            raise ValidationError({'ingredients': _('Debe indicar al menos un ingrediente para el producto.')})
 
-            if not ingredients or len(ingredients) == 0:
-                raise ValidationError({'ingredients': _('Debe indicar al menos un ingrediente para el producto.')})
-
-            unreviewed = list(
-                Ingredient.objects.filter(
-                    id__in=ingredients, allergens_reviewed=False
-                ).values_list('name', flat=True)
-            )
-            if unreviewed:
-                raise ValidationError({
-                    'ingredients': _(
-                        'Estos ingredientes no tienen sus alérgenos confirmados: %(names)s. '
-                        'Confírmalos en "Gestionar alérgenos por ingrediente" antes de guardar el producto.'
-                    ) % {'names': ', '.join(unreviewed)}
-                })
+        unreviewed = [ingredient.name for ingredient in ingredients if not ingredient.allergens_reviewed]
+        if unreviewed:
+            raise ValidationError({
+                'ingredients': _(
+                    'Estos ingredientes no tienen sus alérgenos confirmados: %(names)s. '
+                    'Confírmalos en "Gestionar alérgenos por ingrediente" antes de guardar el producto.'
+                ) % {'names': ', '.join(unreviewed)}
+            })
         return super().validate(attrs)
 
 

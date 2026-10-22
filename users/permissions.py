@@ -36,7 +36,7 @@ class SameInstitutionAsTarget(BasePermission):
     message = _('Esta persona pertenece a otra institución.')
 
     def has_object_permission(self, request, view, obj):
-        from .mixins import resolve_institution_scope
+        from core.mixins import resolve_institution_scope
         operator_institution = resolve_institution_scope(request)
         if operator_institution is None:
             return True
