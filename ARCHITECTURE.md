@@ -40,14 +40,14 @@ Una flecha `A ◄── B` significa "B puede importar de A". **No hay imports c
 |---|---|---|
 | `core` | Aislamiento por institución, mixins de serializers, zona horaria, biometría facial | `mixins.py`, `serializer_mixins.py`, `timezone.py`, `biometrics.py` |
 | `users` | Cuentas, perfiles, instituciones, alergias, control parental, PIN, QR, registro biométrico | `models.py`, `services.py`, `permissions.py`, `views.py` |
-| `catalog` | Alérgenos, ingredientes, productos, platillos, menús mensuales y diarios | `models.py`, `services.py`, `views.py` |
+| `catalog` | Alérgenos, ingredientes, productos, platillos, menús mensuales y diarios, promociones | `models.py`, `services.py`, `views.py` |
 | `wallet` | Billetera, transacciones, recargas con pasarelas | `services.py`, `tasks.py`, `views.py` |
 | `pos` | Preórdenes, ventas, identificación facial/QR, historiales | `services.py`, `mixins.py`, `views.py` |
 
 ### Modelo de datos (resumen)
 
 - **users**: `Institution` (única fuente de verdad de sede) · `CustomUser` (rol, institución, nombre en 4 partes) · `ParentProfile` · `StudentProfile` (padre, institución, foto) · `ParentalControl` · `UserBiometric` (vector cifrado: `encrypted_embedding`, `nonce`, `tag`).
-- **catalog**: `Allergen` · `Ingredient` (alérgenos) · `MenuItem` (producto del POS, con stock) · `MenuDish` (platillo de preorden) · `MonthlyMenu` (borrador/publicado) → `DailyMenu`.
+- **catalog**: `Allergen` · `Ingredient` (alérgenos) · `MenuItem` (producto del POS, con stock) · `MenuDish` (platillo de preorden) · `MonthlyMenu` (borrador/publicado) → `DailyMenu` · `Promotion` (descuento % sobre productos, con fechas de vigencia).
 - **wallet**: `Wallet` (1 a 1 con estudiante, saldo) · `Transaction` (recarga o consumo, pasarela, estado, enlace a `PreOrder` o `Sale`).
 - **pos**: `PreOrder` → `PreOrderItem` · `Sale` (efectivo, crédito o saldo) → `SaleItem`.
 
@@ -56,7 +56,7 @@ Una flecha `A ◄── B` significa "B puede importar de A". **No hay imports c
 | Prefijo | Contenido |
 |---|---|
 | `/api/users/` | Registro de padre y estudiante, login, `me`, hijos, alergias, control parental, PIN de pago, QR (`qr/token/`), biometría (`biometrics/register/`), reset de contraseña, gestión de personal (`staff/`) |
-| `/api/catalog/` | Menú, productos, ingredientes, alérgenos, platillos, menús mensuales (publicar/despublicar), menú del estudiante y del POS |
+| `/api/catalog/` | Menú, productos, ingredientes, alérgenos, platillos, menús mensuales (publicar/despublicar), menú del estudiante y del POS, promociones (`promotions/`, vigentes para la app en `promotions/active/`) |
 | `/api/wallet/` | `recharge/`, `recharge/gateway/`, transacciones, callbacks de Payphone, webhook de Kushki |
 | `/api/pos/` | Preórdenes, ventas, historial, crédito docente, `identify/face/`, `identify/qr/` |
 | `/api/token/` | Login JWT y refresh |
@@ -74,15 +74,18 @@ El saldo siempre se acredita en la base de datos con `F()` (`credit_wallet`). El
 ### 5.2 Venta en el POS
 `process_sale()` elige un `SaleProcessor` por método de pago (`CASH`, `CREDIT`, `WALLET`), todos con el mismo Template Method: bloquear productos → validar cliente → registrar venta → cobrar → descontar stock. Para agregar un método de pago se crea una subclase y se registra en `PROCESSORS`. El cobro con saldo usa `debit_wallet()`, que bloquea la billetera y registra la `Transaction`.
 
-### 5.3 Preorden
+### 5.3 Promociones
+`PromotionService` (en `catalog/services.py`) decide el descuento vigente de cada producto según la fecha local (`core.timezone.local_today`). El precio del producto nunca se modifica: el catálogo devuelve `discount_percentage` y `final_price`, y `SaleProcessor` cobra ese precio, así que al vencer la promoción se vuelve solo al original. Un producto no puede estar en dos promociones con fechas que se cruzan (`validate_products_available`). Las promociones aplican solo a productos (`MenuItem`), nunca a platillos del menú mensual.
+
+### 5.4 Preorden
 `PreOrderCreator` (en `pos/services.py`) valida fecha de entrega (posterior a hoy), menú publicado de la institución, disponibilidad de platillos, control parental y alérgenos, y debita la billetera, todo en una transacción. `deliver_preorder()` la marca entregada solo el día correspondiente.
 
-### 5.4 Identificación en el POS
+### 5.5 Identificación en el POS
 - **Facial**: se extrae el vector de la foto (la imagen no se guarda), se compara por similitud coseno contra los vectores cifrados de la institución (`BIOMETRIC_MATCH_THRESHOLD`, y un margen de ambigüedad `BIOMETRIC_AMBIGUITY_MARGIN`).
 - **QR dinámico**: JWT de corta vida (`QR_TOKEN_TTL_SECONDS`) con un nonce de un solo uso (`consume_qr_nonce`).
 - Un mismo rostro no puede registrarse para dos personas de la misma institución (`FaceAlreadyRegistered`, 409).
 
-### 5.5 Recuperación de contraseña
+### 5.6 Recuperación de contraseña
 Solicitar código → generar (`secrets`) → enviar por correo (Celery) → confirmar. La respuesta es idéntica para correos que no existen, hay un máximo de intentos por código y un límite de llamadas por correo (`CanRequestPasswordReset`). `BasePasswordResetView` es el Template Method; el cambio de contraseña autenticado reutiliza su estructura.
 
 ## 6. Patrones y decisiones

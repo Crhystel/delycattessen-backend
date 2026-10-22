@@ -1,5 +1,9 @@
+from django.db.models import Prefetch
 from django.utils.translation import gettext_lazy as _
 from rest_framework.exceptions import ValidationError
+
+from .models import Promotion
+from .services import PromotionService
 
 
 class IngredientValidationMixin:
@@ -46,3 +50,20 @@ class AllergenSyncMixin:
         instance = super().update(instance, validated_data)
         self._sync_allergens(instance)
         return instance
+
+
+class PromotionsInForceMixin:
+    """
+    Mixin Pattern (over DRF's get_queryset): prefetches today's promotions of
+    each product into `promotions_in_force`, which MenuItemSerializer reads to
+    show the discounted price without one query per product. Evaluated per
+    request, so a promotion stops applying the day after it expires.
+    """
+    def get_queryset(self):
+        return super().get_queryset().prefetch_related(
+            Prefetch(
+                'promotions',
+                queryset=Promotion.objects.in_force(PromotionService.today()),
+                to_attr='promotions_in_force',
+            )
+        )

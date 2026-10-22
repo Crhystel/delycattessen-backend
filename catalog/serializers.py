@@ -1,8 +1,9 @@
 from decimal import Decimal
 from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
-from .models import MenuItem, Allergen, Ingredient, MenuDish, MonthlyMenu, DailyMenu
+from .models import MenuItem, Allergen, Ingredient, MenuDish, MonthlyMenu, DailyMenu, Promotion
 from .mixins import IngredientValidationMixin, AllergenSyncMixin
+from .services import PromotionService
 
 
 class AllergenSerializer(serializers.ModelSerializer):
@@ -65,7 +66,11 @@ class MenuItemSerializer(IngredientValidationMixin, AllergenSyncMixin, serialize
     ModelSerializer's automatic introspection) because DRF's default
     handling for BooleanField can be unreliable on multipart/form-data
     requests — without this, a new product created with an image upload
-    could come back with both False despite the model's default=True."""
+    could come back with both False despite the model's default=True.
+
+    `price` is always the original price; `discount_percentage` and
+    `final_price` reflect the promotion in force today (see PromotionService),
+    so they go back to null/`price` on their own once it expires."""
 
     is_active = serializers.BooleanField(default=True, required=False)
     is_visible = serializers.BooleanField(default=True, required=False)
@@ -84,7 +89,20 @@ class MenuItemSerializer(IngredientValidationMixin, AllergenSyncMixin, serialize
         data = super().to_representation(instance)
         data['ingredients'] = IngredientSerializer(instance.ingredients.all(), many=True).data
         data['allergens'] = AllergenSerializer(instance.allergens.all(), many=True).data
+        discount = self._active_discount(instance)
+        data['discount_percentage'] = discount
+        data['final_price'] = str(PromotionService.discounted_price(instance.price, discount))
         return data
+
+    @staticmethod
+    def _active_discount(instance):
+        # List views prefetch today's promotions into `promotions_in_force`
+        # (see PromotionsInForceMixin) to avoid one query per product.
+        promotions = getattr(instance, 'promotions_in_force', None)
+        if promotions is None:
+            promotions = instance.promotions.in_force(PromotionService.today())
+        promotion = next(iter(promotions), None)
+        return promotion.discount_percentage if promotion else None
 
 
 class MenuDishSerializer(IngredientValidationMixin, AllergenSyncMixin, serializers.ModelSerializer):
@@ -278,4 +296,72 @@ class StudentDailyMenuSerializer(serializers.ModelSerializer):
 
     def get_dishes(self, obj):
         dishes = [d for d in obj.dishes.all() if d.is_active]
-        return StudentMenuDishSerializer(dishes, many=True, context=self.context).data
+        return StudentMenuDishSerializer(dishes, many=True, context=self.context).data
+
+class PromotionProductSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = MenuItem
+        fields = ['id', 'name', 'price', 'image']
+
+
+class PromotionSerializer(serializers.ModelSerializer):
+    """
+    `products` is writable as a list of MenuItem ids of the target institution
+    (context['institution']) and returned nested on read. `status` is never
+    stored: it is derived from today's date, so a promotion becomes "Vencida"
+    by itself and its products go back to their original price.
+    """
+    products = serializers.PrimaryKeyRelatedField(
+        many=True,
+        queryset=MenuItem.objects.filter(is_active=True),
+        allow_empty=False,
+        error_messages={'empty': _('Selecciona al menos un producto para la promoción.')},
+    )
+    discount_percentage = serializers.IntegerField(
+        min_value=1,
+        max_value=99,
+        error_messages={
+            'min_value': _('El descuento debe estar entre 1%% y 99%%.'),
+            'max_value': _('El descuento debe estar entre 1%% y 99%%.'),
+        },
+    )
+    status = serializers.SerializerMethodField()
+    institution_name = serializers.CharField(source='institution.name', read_only=True)
+
+    class Meta:
+        model = Promotion
+        fields = [
+            'id', 'products', 'discount_percentage', 'start_date', 'end_date',
+            'image', 'status', 'institution_name',
+        ]
+
+    def get_status(self, obj) -> str:
+        return obj.status_on(PromotionService.today())
+
+    def validate_products(self, products):
+        institution = self.context.get('institution')
+        if institution and any(p.institution_id != institution.id for p in products):
+            raise serializers.ValidationError(_('Uno o más productos no pertenecen a esta institución.'))
+        return products
+
+    def validate(self, attrs):
+        instance = self.instance
+        start_date = attrs.get('start_date', getattr(instance, 'start_date', None))
+        end_date = attrs.get('end_date', getattr(instance, 'end_date', None))
+        if start_date and end_date and end_date < start_date:
+            raise serializers.ValidationError({'end_date': _('La fecha de fin no puede ser anterior a la de inicio.')})
+        if instance is None and end_date and end_date < PromotionService.today():
+            raise serializers.ValidationError({'end_date': _('La fecha de fin no puede estar en el pasado.')})
+
+        products = attrs.get('products', instance.products.all() if instance else [])
+        PromotionService.validate_products_available(
+            products, start_date, end_date, exclude_id=getattr(instance, 'pk', None)
+        )
+        return attrs
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data['products'] = PromotionProductSerializer(
+            instance.products.all(), many=True, context=self.context
+        ).data
+        return data

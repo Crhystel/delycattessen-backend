@@ -8,6 +8,7 @@ from django.utils.translation import gettext_lazy as _
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from catalog.models import DailyMenu, MenuItem, MonthlyMenu
+from catalog.services import PromotionService
 from core.timezone import local_now, local_today
 from users.models import CustomUser, StudentProfile
 from users.permissions import get_object_institution_id
@@ -37,7 +38,9 @@ class SaleProcessor(AllergenValidatorMixin):
     def process(self, lines):
         """`lines` is a list of (menu_item_id, quantity)."""
         items = self._lock_items(lines)
-        total = sum((item.price * quantity for item, quantity in items), Decimal('0.00'))
+        # Promotions in force today lower the charged price (HU-03.3).
+        prices = PromotionService.unit_prices([item for item, _quantity in items])
+        total = sum((prices[item.id] * quantity for item, quantity in items), Decimal('0.00'))
 
         self.validate_customer(items, total)
 
@@ -49,7 +52,7 @@ class SaleProcessor(AllergenValidatorMixin):
             total_amount=total,
         )
         SaleItem.objects.bulk_create([
-            SaleItem(sale=sale, menu_item=item, quantity=quantity, price_at_purchase=item.price)
+            SaleItem(sale=sale, menu_item=item, quantity=quantity, price_at_purchase=prices[item.id])
             for item, quantity in items
         ])
         self.charge(sale)

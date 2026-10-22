@@ -14,7 +14,8 @@ from core.mixins import OwnInstitutionMixin, ViewerInstitutionMixin
 from users.models import StudentProfile
 from users.permissions import IsAdministrator, IsOperativeUser, IsParentOfStudent, SameInstitutionAsTarget
 
-from .models import Allergen, DailyMenu, Ingredient, MenuDish, MenuItem, MonthlyMenu
+from .mixins import PromotionsInForceMixin
+from .models import Allergen, DailyMenu, Ingredient, MenuDish, MenuItem, MonthlyMenu, Promotion
 from .serializers import (
     AllergenCreateSerializer,
     AllergenSerializer,
@@ -26,12 +27,13 @@ from .serializers import (
     MenuItemSerializer,
     MonthlyMenuCreateSerializer,
     MonthlyMenuSerializer,
+    PromotionSerializer,
     StudentDailyMenuSerializer,
 )
-from .services import MonthlyMenuService
+from .services import MonthlyMenuService, PromotionService
 
 
-class MenuListView(ViewerInstitutionMixin, generics.ListAPIView):
+class MenuListView(PromotionsInForceMixin, ViewerInstitutionMixin, generics.ListAPIView):
     """Products of a single institution; see ViewerInstitutionMixin for how
     it is chosen per role (parents pass ?student_id=)."""
     queryset = MenuItem.objects.filter(is_active=True, is_visible=True)
@@ -39,7 +41,7 @@ class MenuListView(ViewerInstitutionMixin, generics.ListAPIView):
     permission_classes = [IsAuthenticated]
 
 
-class AdminMenuListView(OwnInstitutionMixin, generics.ListAPIView):
+class AdminMenuListView(PromotionsInForceMixin, OwnInstitutionMixin, generics.ListAPIView):
     """Only active products: a "deleted" (is_active=False) product should
     disappear from the admin catalog too, not just from the parent-facing
     menu. The row stays in the database so historical PreOrderItem records
@@ -74,6 +76,47 @@ class MenuItemDetailView(OwnInstitutionMixin, generics.RetrieveUpdateDestroyAPIV
         instance.is_active = False
         instance.is_visible = False
         instance.save()
+
+
+class PromotionListCreateView(OwnInstitutionMixin, generics.ListCreateAPIView):
+    """
+    GET, POST /api/catalog/promotions/
+    Lists the promotions of the admin's institution (newest first) or creates
+    one. A product already in a promotion with overlapping dates is rejected
+    (PromotionSerializer -> PromotionService.validate_products_available).
+    """
+    queryset = Promotion.objects.select_related('institution').prefetch_related('products')
+    serializer_class = PromotionSerializer
+    permission_classes = [IsAdministrator]
+
+    def perform_create(self, serializer):
+        serializer.save(institution=self.get_user_institution(), created_by=self.request.user)
+
+
+class PromotionDetailView(OwnInstitutionMixin, generics.RetrieveUpdateDestroyAPIView):
+    """
+    GET, PATCH, DELETE /api/catalog/promotions/<int:pk>/
+    Deleting a promotion is a real delete: sales keep their own
+    price_at_purchase, so no history depends on the promotion row.
+    """
+    queryset = Promotion.objects.select_related('institution').prefetch_related('products')
+    serializer_class = PromotionSerializer
+    permission_classes = [IsAdministrator]
+
+
+class ActivePromotionListView(ViewerInstitutionMixin, generics.ListAPIView):
+    """
+    GET /api/catalog/promotions/active/
+    Promotions in force today for the viewer's institution (parents pass
+    ?student_id=, as in MenuListView), used by the mobile promotion banner.
+    """
+    queryset = Promotion.objects.select_related('institution').prefetch_related('products')
+    serializer_class = PromotionSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        # Evaluated per request so a promotion disappears the day after it ends.
+        return super().get_queryset().in_force(PromotionService.today())
 
 
 class IngredientListView(generics.ListAPIView):

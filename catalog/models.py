@@ -195,3 +195,71 @@ class DailyMenu(models.Model):
 
     def __str__(self):
         return f"{self.monthly_menu} - {self.date}"
+
+
+class PromotionQuerySet(models.QuerySet):
+    def in_force(self, on_date):
+        """Promotions whose validity period includes `on_date`."""
+        return self.filter(start_date__lte=on_date, end_date__gte=on_date)
+
+
+class Promotion(models.Model):
+    """
+    Percentage discount over catalog products (HU-03.3) for a validity period.
+    The product price is never modified: the discounted price is derived
+    while the promotion is in force, so the original price comes back on its
+    own once end_date passes, with no manual step or scheduled job.
+    Monthly menu dishes are out of scope: only MenuItem can be promoted.
+    """
+    class Status(models.TextChoices):
+        SCHEDULED = 'SCHEDULED', _('Programada')
+        ACTIVE = 'ACTIVE', _('Activa')
+        EXPIRED = 'EXPIRED', _('Vencida')
+
+    institution = models.ForeignKey(
+        'users.Institution',
+        verbose_name=_('institution'),
+        on_delete=models.PROTECT,
+        related_name='promotions',
+    )
+    products = models.ManyToManyField(MenuItem, related_name='promotions')
+    discount_percentage = models.PositiveSmallIntegerField(
+        _('discount percentage'),
+        validators=[MinValueValidator(1), MaxValueValidator(99)],
+    )
+    start_date = models.DateField(_('start date'))
+    end_date = models.DateField(_('end date'))
+    image = models.ImageField(_('image'), upload_to='catalog/promotions/', blank=True, null=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        verbose_name=_('created by'),
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='created_promotions',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    objects = PromotionQuerySet.as_manager()
+
+    class Meta:
+        verbose_name = _('promotion')
+        verbose_name_plural = _('promotions')
+        ordering = ['-start_date', '-id']
+
+    def save(self, *args, **kwargs):
+        if self.image:
+            from delycattessen_backend.image_utils import resize_image_field
+            resize_image_field(self.image)
+        super().save(*args, **kwargs)
+
+    def status_on(self, on_date):
+        if on_date < self.start_date:
+            return self.Status.SCHEDULED
+        if on_date > self.end_date:
+            return self.Status.EXPIRED
+        return self.Status.ACTIVE
+
+    def __str__(self):
+        return f"-{self.discount_percentage}% ({self.start_date} - {self.end_date})"

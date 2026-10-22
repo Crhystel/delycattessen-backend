@@ -1,15 +1,18 @@
 import calendar
 import logging
 from datetime import date
+from decimal import Decimal, ROUND_HALF_UP
 from functools import partial
-from typing import Sequence
+from typing import Iterable, Sequence
 from kombu.exceptions import OperationalError
 from django.db import transaction
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from rest_framework.exceptions import ValidationError
 
-from .models import MonthlyMenu, DailyMenu, MenuDish
+from core.timezone import local_today
+
+from .models import MonthlyMenu, DailyMenu, MenuDish, MenuItem, Promotion
 from .tasks import send_monthly_menu_published_email
 
 logger = logging.getLogger(__name__)
@@ -113,3 +116,64 @@ class MonthlyMenuService:
         monthly_menu.status = MonthlyMenu.Status.DRAFT
         monthly_menu.save(update_fields=['status', 'updated_at'])
         return monthly_menu
+
+
+class PromotionService:
+    """
+    Service Layer Pattern: single place that decides which discount applies
+    to a product today, so the catalog, the admin panel and the POS charge
+    the same price. Promotion validity is evaluated on Ecuador's local date.
+    """
+
+    @staticmethod
+    def today() -> date:
+        return local_today()
+
+    @staticmethod
+    def discounted_price(price: Decimal, discount_percentage: int | None) -> Decimal:
+        if not discount_percentage:
+            return price
+        factor = (Decimal(100) - Decimal(discount_percentage)) / Decimal(100)
+        return (price * factor).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
+    @classmethod
+    def active_discounts(cls, item_ids: Iterable[int], on_date: date | None = None) -> dict[int, int]:
+        """Maps each product id with a promotion in force to its discount."""
+        rows = Promotion.products.through.objects.filter(
+            menuitem_id__in=list(item_ids),
+            promotion__in=Promotion.objects.in_force(on_date or cls.today()),
+        ).values_list('menuitem_id', 'promotion__discount_percentage')
+        return dict(rows)
+
+    @classmethod
+    def unit_prices(cls, items: Sequence[MenuItem]) -> dict[int, Decimal]:
+        """Price to charge per product id, with today's discount applied."""
+        discounts = cls.active_discounts(item.id for item in items)
+        return {item.id: cls.discounted_price(item.price, discounts.get(item.id)) for item in items}
+
+    @staticmethod
+    def validate_products_available(products, start_date: date, end_date: date, exclude_id=None) -> None:
+        """
+        A product cannot be in two promotions whose periods overlap, so it
+        never has two active promotions at the same time.
+        """
+        overlapping = Promotion.objects.filter(
+            products__in=products,
+            start_date__lte=end_date,
+            end_date__gte=start_date,
+        )
+        if exclude_id is not None:
+            overlapping = overlapping.exclude(pk=exclude_id)
+        names = sorted(set(
+            MenuItem.objects.filter(
+                pk__in=[product.pk for product in products],
+                promotions__in=overlapping,
+            ).values_list('name', flat=True)
+        ))
+        if names:
+            raise ValidationError({
+                'products': _(
+                    'Estos productos ya tienen una promoción en esas fechas: %(names)s. '
+                    'Espera a que venza o elige otras fechas.'
+                ) % {'names': ', '.join(names)}
+            })
