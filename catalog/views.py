@@ -15,10 +15,11 @@ from users.models import StudentProfile
 from users.permissions import IsAdministrator, IsOperativeUser, IsParentOfStudent, SameInstitutionAsTarget
 
 from .mixins import PromotionsInForceMixin
-from .models import Allergen, DailyMenu, Ingredient, MenuDish, MenuItem, MonthlyMenu, Promotion
+from .models import Allergen, Combo, DailyMenu, Ingredient, MenuDish, MenuItem, MonthlyMenu, Promotion
 from .serializers import (
     AllergenCreateSerializer,
     AllergenSerializer,
+    ComboSerializer,
     DailyMenuSerializer,
     DailyMenuUpdateSerializer,
     IngredientCreateSerializer,
@@ -30,7 +31,7 @@ from .serializers import (
     PromotionSerializer,
     StudentDailyMenuSerializer,
 )
-from .services import MonthlyMenuService, PromotionService
+from .services import ComboService, MonthlyMenuService, PromotionService
 
 
 class MenuListView(PromotionsInForceMixin, ViewerInstitutionMixin, generics.ListAPIView):
@@ -117,6 +118,43 @@ class ActivePromotionListView(ViewerInstitutionMixin, generics.ListAPIView):
     def get_queryset(self):
         # Evaluated per request so a promotion disappears the day after it ends.
         return super().get_queryset().in_force(PromotionService.today())
+
+
+class ComboListCreateView(OwnInstitutionMixin, generics.ListCreateAPIView):
+    """
+    GET, POST /api/catalog/combos/
+    Combos of the admin's institution (newest first), or creates one.
+    """
+    queryset = Combo.objects.select_related('institution').prefetch_related('items__menu_item')
+    serializer_class = ComboSerializer
+    permission_classes = [IsAdministrator]
+
+    def perform_create(self, serializer):
+        serializer.save(institution=self.get_user_institution(), created_by=self.request.user)
+
+
+class ComboDetailView(OwnInstitutionMixin, generics.RetrieveUpdateDestroyAPIView):
+    """
+    GET, PATCH, DELETE /api/catalog/combos/<int:pk>/
+    Deleting is a real delete: sold combos keep their own name and price.
+    """
+    queryset = Combo.objects.select_related('institution').prefetch_related('items__menu_item')
+    serializer_class = ComboSerializer
+    permission_classes = [IsAdministrator]
+
+
+class ActiveComboListView(ViewerInstitutionMixin, generics.ListAPIView):
+    """
+    GET /api/catalog/combos/active/
+    Combos in force today for the viewer's institution (parents pass
+    ?student_id=): the banner of the app and the combos the POS can sell.
+    """
+    queryset = Combo.objects.select_related('institution')
+    serializer_class = ComboSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return ComboService.in_force(super().get_queryset())
 
 
 class IngredientListView(generics.ListAPIView):

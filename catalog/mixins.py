@@ -1,5 +1,6 @@
 from django.db.models import Prefetch
 from django.utils.translation import gettext_lazy as _
+from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 
 from .models import Promotion
@@ -67,3 +68,27 @@ class PromotionsInForceMixin:
                 to_attr='promotions_in_force',
             )
         )
+
+
+class ValidityPeriodSerializerMixin(serializers.Serializer):
+    """
+    Mixin Pattern: `status` (derived from today, never stored) and the date
+    rules shared by every offer with a validity period (discounts, combos).
+    Subclasses set `service` to the class whose today() dates the offer.
+    """
+    service = None
+
+    status = serializers.SerializerMethodField()
+
+    def get_status(self, obj) -> str:
+        return obj.status_on(self.service.today())
+
+    def validate_period(self, attrs):
+        """Returns the (start_date, end_date) the object will have after saving."""
+        start_date = attrs.get('start_date', getattr(self.instance, 'start_date', None))
+        end_date = attrs.get('end_date', getattr(self.instance, 'end_date', None))
+        if start_date and end_date and end_date < start_date:
+            raise ValidationError({'end_date': _('La fecha de fin no puede ser anterior a la de inicio.')})
+        if self.instance is None and end_date and end_date < self.service.today():
+            raise ValidationError({'end_date': _('La fecha de fin no puede estar en el pasado.')})
+        return start_date, end_date

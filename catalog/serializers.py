@@ -1,9 +1,9 @@
 from decimal import Decimal
 from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
-from .models import MenuItem, Allergen, Ingredient, MenuDish, MonthlyMenu, DailyMenu, Promotion
-from .mixins import IngredientValidationMixin, AllergenSyncMixin
-from .services import PromotionService
+from .models import MenuItem, Allergen, Ingredient, MenuDish, MonthlyMenu, DailyMenu, Promotion, Combo
+from .mixins import IngredientValidationMixin, AllergenSyncMixin, ValidityPeriodSerializerMixin
+from .services import ComboService, PromotionService
 
 
 class AllergenSerializer(serializers.ModelSerializer):
@@ -304,7 +304,7 @@ class PromotionProductSerializer(serializers.ModelSerializer):
         fields = ['id', 'name', 'price', 'image']
 
 
-class PromotionSerializer(serializers.ModelSerializer):
+class PromotionSerializer(ValidityPeriodSerializerMixin, serializers.ModelSerializer):
     """
     `products` is writable as a list of MenuItem ids of the target institution
     (context['institution']) and returned nested on read. `status` is never
@@ -325,8 +325,8 @@ class PromotionSerializer(serializers.ModelSerializer):
             'max_value': _('El descuento debe estar entre 1%% y 99%%.'),
         },
     )
-    status = serializers.SerializerMethodField()
     institution_name = serializers.CharField(source='institution.name', read_only=True)
+    service = PromotionService
 
     class Meta:
         model = Promotion
@@ -334,9 +334,6 @@ class PromotionSerializer(serializers.ModelSerializer):
             'id', 'products', 'discount_percentage', 'start_date', 'end_date',
             'image', 'status', 'institution_name',
         ]
-
-    def get_status(self, obj) -> str:
-        return obj.status_on(PromotionService.today())
 
     def validate_products(self, products):
         institution = self.context.get('institution')
@@ -346,13 +343,7 @@ class PromotionSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         instance = self.instance
-        start_date = attrs.get('start_date', getattr(instance, 'start_date', None))
-        end_date = attrs.get('end_date', getattr(instance, 'end_date', None))
-        if start_date and end_date and end_date < start_date:
-            raise serializers.ValidationError({'end_date': _('La fecha de fin no puede ser anterior a la de inicio.')})
-        if instance is None and end_date and end_date < PromotionService.today():
-            raise serializers.ValidationError({'end_date': _('La fecha de fin no puede estar en el pasado.')})
-
+        start_date, end_date = self.validate_period(attrs)
         products = attrs.get('products', instance.products.all() if instance else [])
         PromotionService.validate_products_available(
             products, start_date, end_date, exclude_id=getattr(instance, 'pk', None)
@@ -364,4 +355,77 @@ class PromotionSerializer(serializers.ModelSerializer):
         data['products'] = PromotionProductSerializer(
             instance.products.all(), many=True, context=self.context
         ).data
+        return data
+
+
+class ComboItemSerializer(serializers.Serializer):
+    """Product of a combo on read, with its own price to show the saving."""
+    product_id = serializers.IntegerField(source='menu_item.id')
+    name = serializers.CharField(source='menu_item.name')
+    price = serializers.DecimalField(source='menu_item.price', max_digits=6, decimal_places=2)
+    quantity = serializers.IntegerField()
+
+
+class ComboItemInputSerializer(serializers.Serializer):
+    product_id = serializers.PrimaryKeyRelatedField(queryset=MenuItem.objects.filter(is_active=True))
+    quantity = serializers.IntegerField(min_value=1)
+
+
+class ComboSerializer(ValidityPeriodSerializerMixin, serializers.ModelSerializer):
+    """
+    `items` is written as a JSON list of {product_id, quantity} — sent as text
+    because the request is multipart (it carries the image) — and returned
+    nested on read together with `regular_price`, the price of the products
+    bought separately.
+    """
+    items = serializers.JSONField(binary=True, write_only=True)
+    price = serializers.DecimalField(
+        max_digits=6, decimal_places=2, min_value=Decimal('0.01'),
+        error_messages={'min_value': _('El precio del combo debe ser mayor a 0.')},
+    )
+    institution_name = serializers.CharField(source='institution.name', read_only=True)
+    service = ComboService
+
+    class Meta:
+        model = Combo
+        fields = [
+            'id', 'name', 'price', 'image', 'start_date', 'end_date',
+            'items', 'status', 'institution_name',
+        ]
+
+    def validate_items(self, value):
+        if not isinstance(value, list) or not value:
+            raise serializers.ValidationError(_('Agrega al menos un producto al combo.'))
+        items = ComboItemInputSerializer(data=value, many=True)
+        items.is_valid(raise_exception=True)
+        pairs = [(row['product_id'], row['quantity']) for row in items.validated_data]
+        products = [product for product, _quantity in pairs]
+        if len({product.id for product in products}) != len(products):
+            raise serializers.ValidationError(_('Un producto aparece más de una vez en el combo.'))
+        institution = self.context.get('institution')
+        if institution and any(product.institution_id != institution.id for product in products):
+            raise serializers.ValidationError(_('Uno o más productos no pertenecen a esta institución.'))
+        return pairs
+
+    def validate(self, attrs):
+        self.validate_period(attrs)
+        return attrs
+
+    def create(self, validated_data):
+        items = validated_data.pop('items')
+        combo = super().create(validated_data)
+        ComboService.set_items(combo, items)
+        return combo
+
+    def update(self, instance, validated_data):
+        items = validated_data.pop('items', None)
+        combo = super().update(instance, validated_data)
+        if items is not None:
+            ComboService.set_items(combo, items)
+        return combo
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data['items'] = ComboItemSerializer(instance.items.all(), many=True).data
+        data['regular_price'] = str(instance.regular_price())
         return data

@@ -20,6 +20,9 @@ from .views import (
     POSStudentMenuView,
     PromotionListCreateView,
     ActivePromotionListView,
+    ComboListCreateView,
+    ComboDetailView,
+    ActiveComboListView,
     PromotionDetailView,
 )
 
@@ -46,4 +49,7 @@ urlpatterns = [
     path('promotions/', PromotionListCreateView.as_view(), name='promotion_list_create'),
     path('promotions/active/', ActivePromotionListView.as_view(), name='promotion_active_list'),
     path('promotions/<int:pk>/', PromotionDetailView.as_view(), name='promotion_detail'),
+    path('combos/', ComboListCreateView.as_view(), name='combo_list_create'),
+    path('combos/active/', ActiveComboListView.as_view(), name='combo_active_list'),
+    path('combos/<int:pk>/', ComboDetailView.as_view(), name='combo_detail'),
 ]

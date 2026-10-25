@@ -51,10 +51,21 @@ class SaleItemInputSerializer(serializers.Serializer):
     quantity = serializers.IntegerField(min_value=1)
 
 
+class SaleComboInputSerializer(serializers.Serializer):
+    combo_id = serializers.IntegerField()
+    quantity = serializers.IntegerField(min_value=1)
+
+
 class SaleCreateSerializer(serializers.Serializer):
     payment_method = serializers.ChoiceField(choices=Sale.PaymentMethod.choices)
     user_id = serializers.IntegerField(required=False)
-    items = SaleItemInputSerializer(many=True, allow_empty=False)
+    items = SaleItemInputSerializer(many=True, required=False, default=list)
+    combos = SaleComboInputSerializer(many=True, required=False, default=list)
+
+    def validate(self, attrs):
+        if not attrs['items'] and not attrs['combos']:
+            raise serializers.ValidationError({'items': _('Agrega al menos un producto o combo.')})
+        return attrs
 
 
 class SaleSerializer(LineSummaryMixin, serializers.ModelSerializer):
@@ -63,7 +74,9 @@ class SaleSerializer(LineSummaryMixin, serializers.ModelSerializer):
         fields = ('id', 'payment_method', 'total_amount', 'created_at', 'display_name', 'time', 'items')
 
     def get_lines(self, obj):
-        return [(item.menu_item.name, item.quantity, item.price_at_purchase) for item in obj.items.all()]
+        lines = [(item.menu_item.name, item.quantity, item.price_at_purchase) for item in obj.items.all()]
+        lines += [(combo.name, combo.quantity, combo.price_at_purchase) for combo in obj.combos.all()]
+        return lines
 
 
 class ParentSaleSerializer(SaleSerializer):

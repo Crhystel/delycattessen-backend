@@ -12,6 +12,7 @@ from users.models import CustomUser
 SUMMARY = '/api/pos/analytics/summary/'
 TIMESERIES = '/api/pos/analytics/timeseries/'
 TOP_PRODUCTS = '/api/pos/analytics/top-products/'
+TOP_COMBOS = '/api/pos/analytics/top-combos/'
 RANGE = 'date_from=2026-03-06&date_to=2026-03-10'
 
 
@@ -36,14 +37,14 @@ class AnalyticsApiTests(AnalyticsFixtureMixin, APITestCase):
     # ---- access ---------------------------------------------------------
     def test_anonymous_gets_401(self):
         self.client.credentials()
-        for url in (SUMMARY, TIMESERIES, TOP_PRODUCTS):
+        for url in (SUMMARY, TIMESERIES, TOP_PRODUCTS, TOP_COMBOS):
             self.assertEqual(self.client.get(url).status_code, 401)
 
     def test_only_the_administrator_can_read_analytics(self):
         parent = CustomUser.objects.get(username='parent')
         for user in (self.cashier, self.teacher, parent, self.student_a.user):
             self._auth(user)
-            for url in (SUMMARY, TIMESERIES, TOP_PRODUCTS):
+            for url in (SUMMARY, TIMESERIES, TOP_PRODUCTS, TOP_COMBOS):
                 self.assertEqual(self.client.get(f'{url}?{RANGE}').status_code, 403, (user.role, url))
 
     # ---- institution scope ----------------------------------------------

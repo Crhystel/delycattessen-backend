@@ -97,3 +97,18 @@ class SaleItem(models.Model):
 
     def __str__(self):
         return f'{self.quantity}x {self.menu_item.name}'
+
+
+class SaleCombo(models.Model):
+    """A combo sold as one line. The name is kept so the receipt survives if
+    the admin later deletes the combo."""
+    sale = models.ForeignKey(Sale, on_delete=models.CASCADE, related_name='combos')
+    combo = models.ForeignKey(
+        'catalog.Combo', on_delete=models.SET_NULL, null=True, blank=True, related_name='sale_lines',
+    )
+    name = models.CharField(_('name'), max_length=200)
+    quantity = models.PositiveIntegerField()
+    price_at_purchase = models.DecimalField(_('price at purchase'), max_digits=6, decimal_places=2)
+
+    def __str__(self):
+        return f'{self.quantity}x {self.name}'

@@ -12,7 +12,7 @@ from rest_framework.exceptions import ValidationError
 
 from core.timezone import local_today
 
-from .models import MonthlyMenu, DailyMenu, MenuDish, MenuItem, Promotion
+from .models import Combo, ComboItem, MonthlyMenu, DailyMenu, MenuDish, MenuItem, Promotion
 from .tasks import send_monthly_menu_published_email
 
 logger = logging.getLogger(__name__)
@@ -177,3 +177,45 @@ class PromotionService:
                     'Espera a que venza o elige otras fechas.'
                 ) % {'names': ', '.join(names)}
             })
+
+
+class ComboService:
+    """
+    Service Layer Pattern: combos in force and their contents, shared by the
+    catalog banner and the POS sale. Validity uses Ecuador's local date.
+    """
+
+    @staticmethod
+    def today() -> date:
+        return local_today()
+
+    @classmethod
+    def in_force(cls, queryset=None):
+        queryset = Combo.objects.all() if queryset is None else queryset
+        return queryset.in_force(cls.today()).prefetch_related('items__menu_item')
+
+    @classmethod
+    def combos_for_sale(cls, institution, combo_lines) -> list[tuple[Combo, int]]:
+        """`combo_lines` is a list of (combo_id, quantity); only combos in force
+        in `institution` can be sold."""
+        quantities: dict[int, int] = {}
+        for combo_id, quantity in combo_lines:
+            quantities[combo_id] = quantities.get(combo_id, 0) + quantity
+        if not quantities:
+            return []
+        found = {
+            combo.id: combo
+            for combo in cls.in_force(Combo.objects.filter(institution=institution, id__in=quantities))
+        }
+        if len(found) != len(quantities):
+            raise ValidationError({'combos': _('Uno o más combos no están vigentes en esta institución.')})
+        return [(found[combo_id], quantity) for combo_id, quantity in quantities.items()]
+
+    @staticmethod
+    @transaction.atomic
+    def set_items(combo: Combo, items: Sequence[tuple[MenuItem, int]]) -> None:
+        """Replaces the products of `combo` with (product, quantity) pairs."""
+        combo.items.all().delete()
+        ComboItem.objects.bulk_create([
+            ComboItem(combo=combo, menu_item=product, quantity=quantity) for product, quantity in items
+        ])

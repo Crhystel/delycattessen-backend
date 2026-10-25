@@ -6,7 +6,7 @@ from django.test import TestCase, override_settings
 
 from catalog.models import DailyMenu, Ingredient, MenuDish, MenuItem, MonthlyMenu
 from core.timezone import LOCAL_TIMEZONE
-from pos.models import PreOrder, PreOrderItem, Sale, SaleItem
+from pos.models import PreOrder, PreOrderItem, Sale, SaleCombo, SaleItem
 from pos.services import CHANNEL_PREORDER, SalesAnalytics
 from users.models import CustomUser, Institution, ParentProfile, StudentProfile
 from wallet.models import Transaction, Wallet
@@ -256,3 +256,50 @@ class TopProductsTests(AnalyticsFixtureMixin, TestCase):
         top = self._top()
         self.assertEqual(len(top['by_revenue']), 1)
         self.assertEqual(len(top['by_units']), 1)
+
+
+class TopCombosTests(AnalyticsFixtureMixin, TestCase):
+    """Combos are ranked apart from the products, at the price they were sold."""
+
+    def setUp(self):
+        super().setUp()
+        cash = Sale.PaymentMethod.CASH
+        self._combo_sale(self.inst_a, local(2026, 3, 5), [('Combo almuerzo', 2, '3.50'), ('Combo snack', 5, '1.50')])
+        self._combo_sale(self.inst_a, local(2026, 3, 6), [('Combo almuerzo', 1, '3.00')])
+        self._combo_sale(self.inst_b, local(2026, 3, 6), [('Combo B', 9, '2.00')])
+        self._combo_sale(self.inst_a, local(2026, 4, 1), [('Combo almuerzo', 50, '3.50')])
+        self._sale(self.inst_a, cash, local(2026, 3, 6), [(self.sandwich, 1, '2.50')])
+
+    def _combo_sale(self, institution, when, lines):
+        """`lines` is a list of (combo name, quantity, unit_price)."""
+        sale = self._sale(institution, Sale.PaymentMethod.CASH, when, amount=sum(
+            (Decimal(price) * quantity for _name, quantity, price in lines), Decimal('0.00')))
+        for name, quantity, price in lines:
+            SaleCombo.objects.create(sale=sale, name=name, quantity=quantity, price_at_purchase=Decimal(price))
+        return sale
+
+    def _top(self, institution=None):
+        return SalesAnalytics(institution, date(2026, 3, 1), date(2026, 3, 31)).top_combos()
+
+    def test_combos_are_ranked_with_their_totals(self):
+        top = self._top(self.inst_a)
+        self.assertEqual(top['by_revenue'], [
+            {'name': 'Combo almuerzo', 'units': 3, 'revenue': '10.00'},
+            {'name': 'Combo snack', 'units': 5, 'revenue': '7.50'},
+        ])
+        self.assertEqual([row['name'] for row in top['by_units']], ['Combo snack', 'Combo almuerzo'])
+        self.assertEqual(top['totals'], {'units': 8, 'revenue': '17.50'})
+
+    def test_products_are_not_mixed_with_combos(self):
+        names = [row['name'] for row in self._top(self.inst_a)['by_revenue']]
+        self.assertNotIn('Sandwich', names)
+        products = SalesAnalytics(self.inst_a, date(2026, 3, 1), date(2026, 3, 31)).top_products()
+        self.assertNotIn('Combo almuerzo', [row['name'] for row in products['by_revenue']])
+
+    def test_institution_scope_and_consolidated_view(self):
+        self.assertEqual([row['name'] for row in self._top(self.inst_b)['by_revenue']], ['Combo B'])
+        self.assertEqual(self._top()['totals'], {'units': 17, 'revenue': '35.50'})
+
+    def test_empty_period_has_zero_totals(self):
+        top = SalesAnalytics(self.inst_a, date(2026, 5, 1), date(2026, 5, 31)).top_combos()
+        self.assertEqual(top, {'by_revenue': [], 'by_units': [], 'totals': {'units': 0, 'revenue': '0.00'}})

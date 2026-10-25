@@ -40,14 +40,14 @@ Una flecha `A ◄── B` significa "B puede importar de A". **No hay imports c
 |---|---|---|
 | `core` | Aislamiento por institución, mixins de serializers, zona horaria, biometría facial | `mixins.py`, `serializer_mixins.py`, `timezone.py`, `biometrics.py` |
 | `users` | Cuentas, perfiles, instituciones, alergias, control parental, PIN, QR, registro biométrico | `models.py`, `services.py`, `permissions.py`, `views.py` |
-| `catalog` | Alérgenos, ingredientes, productos, platillos, menús mensuales y diarios, promociones | `models.py`, `services.py`, `views.py` |
+| `catalog` | Alérgenos, ingredientes, productos, platillos, menús mensuales y diarios, descuentos y combos | `models.py`, `services.py`, `views.py` |
 | `wallet` | Billetera, transacciones, recargas con pasarelas | `services.py`, `tasks.py`, `views.py` |
 | `pos` | Preórdenes, ventas, identificación facial/QR, historiales | `services.py`, `mixins.py`, `views.py` |
 
 ### Modelo de datos (resumen)
 
 - **users**: `Institution` (única fuente de verdad de sede) · `CustomUser` (rol, institución, nombre en 4 partes) · `ParentProfile` · `StudentProfile` (padre, institución, foto) · `ParentalControl` · `UserBiometric` (vector cifrado: `encrypted_embedding`, `nonce`, `tag`).
-- **catalog**: `Allergen` · `Ingredient` (alérgenos) · `MenuItem` (producto del POS, con stock) · `MenuDish` (platillo de preorden) · `MonthlyMenu` (borrador/publicado) → `DailyMenu` · `Promotion` (descuento % sobre productos, con fechas de vigencia).
+- **catalog**: `Allergen` · `Ingredient` (alérgenos) · `MenuItem` (producto del POS, con stock) · `MenuDish` (platillo de preorden) · `MonthlyMenu` (borrador/publicado) → `DailyMenu` · `Promotion` (descuento % sobre productos) y `Combo` → `ComboItem` (productos a precio fijo), ambos con fechas de vigencia (`ValidityPeriod`).
 - **wallet**: `Wallet` (1 a 1 con estudiante, saldo) · `Transaction` (recarga o consumo, pasarela, estado, enlace a `PreOrder` o `Sale`).
 - **pos**: `PreOrder` → `PreOrderItem` · `Sale` (efectivo, crédito o saldo) → `SaleItem`.
 
@@ -56,9 +56,9 @@ Una flecha `A ◄── B` significa "B puede importar de A". **No hay imports c
 | Prefijo | Contenido |
 |---|---|
 | `/api/users/` | Registro de padre y estudiante, login, `me`, hijos, alergias, control parental, PIN de pago, QR (`qr/token/`), biometría (`biometrics/register/`), reset de contraseña, gestión de personal (`staff/`) |
-| `/api/catalog/` | Menú, productos, ingredientes, alérgenos, platillos, menús mensuales (publicar/despublicar), menú del estudiante y del POS, promociones (`promotions/`, vigentes para la app en `promotions/active/`) |
+| `/api/catalog/` | Menú, productos, ingredientes, alérgenos, platillos, menús mensuales (publicar/despublicar), menú del estudiante y del POS, descuentos (`promotions/`, vigentes en `promotions/active/`) y combos (`combos/`, vigentes en `combos/active/`) |
 | `/api/wallet/` | `recharge/`, `recharge/gateway/`, transacciones, callbacks de Payphone, webhook de Kushki |
-| `/api/pos/` | Preórdenes, ventas, historial, crédito docente, `identify/face/`, `identify/qr/`, analítica de ventas para el administrador (`analytics/summary/`, `analytics/timeseries/`, `analytics/top-products/`) |
+| `/api/pos/` | Preórdenes, ventas, historial, crédito docente, `identify/face/`, `identify/qr/`, analítica de ventas para el administrador (`analytics/summary/`, `analytics/timeseries/`, `analytics/top-products/`, `analytics/top-combos/`) |
 | `/api/token/` | Login JWT y refresh |
 
 ## 5. Flujos clave
@@ -74,8 +74,10 @@ El saldo siempre se acredita en la base de datos con `F()` (`credit_wallet`). El
 ### 5.2 Venta en el POS
 `process_sale()` elige un `SaleProcessor` por método de pago (`CASH`, `CREDIT`, `WALLET`), todos con el mismo Template Method: bloquear productos → validar cliente → registrar venta → cobrar → descontar stock. Para agregar un método de pago se crea una subclase y se registra en `PROCESSORS`. El cobro con saldo usa `debit_wallet()`, que bloquea la billetera y registra la `Transaction`.
 
-### 5.3 Promociones
+### 5.3 Descuentos y combos
 `PromotionService` (en `catalog/services.py`) decide el descuento vigente de cada producto según la fecha local (`core.timezone.local_today`). El precio del producto nunca se modifica: el catálogo devuelve `discount_percentage` y `final_price`, y `SaleProcessor` cobra ese precio, así que al vencer la promoción se vuelve solo al original. Un producto no puede estar en dos promociones con fechas que se cruzan (`validate_products_available`). Las promociones aplican solo a productos (`MenuItem`), nunca a platillos del menú mensual.
+
+Un `Combo` agrupa productos a un precio fijo (p. ej. sánduche + cola a $3.50). `ComboService` da los combos vigentes; en la venta, `SaleProcessor` recibe además `combo_lines`: bloquea y descuenta el stock de cada producto del combo, revisa sus alérgenos y registra el combo como una sola línea `SaleCombo` (guarda el nombre, así el recibo sobrevive si se borra el combo). Un producto puede tener descuento y estar en un combo: dentro del combo vale el precio del combo.
 
 ### 5.4 Preorden
 `PreOrderCreator` (en `pos/services.py`) valida fecha de entrega (posterior a hoy), menú publicado de la institución, disponibilidad de platillos, control parental y alérgenos, y debita la billetera, todo en una transacción. `deliver_preorder()` la marca entregada solo el día correspondiente.
@@ -98,6 +100,7 @@ Reglas de las métricas:
 - Los días se cortan en hora local (`core.timezone.LOCAL_TIMEZONE`), no en UTC: una venta de las 23:30 queda en su día.
 - La comparativa usa el periodo inmediatamente anterior de igual duración; el cambio es `null` si ese periodo vale 0.
 - Top de productos: `SaleItem` y `PreOrderItem` unidos por nombre, con ingreso `cantidad × price_at_purchase` (ya incluye la promoción); dos rankings (`by_revenue`, `by_units`) de `ANALYTICS_TOP_PRODUCTS_LIMIT` filas.
+- Top de combos: aparte de los productos, desde `SaleCombo` (cada combo es una línea a su precio, agrupado por el nombre guardado en la venta), con los mismos dos rankings y los totales del periodo (`totals.units`, `totals.revenue`).
 
 ## 6. Patrones y decisiones
 

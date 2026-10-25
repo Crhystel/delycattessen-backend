@@ -10,21 +10,23 @@ from django.utils.translation import gettext_lazy as _
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from catalog.models import DailyMenu, MenuItem, MonthlyMenu
-from catalog.services import PromotionService
+from catalog.services import ComboService, PromotionService
 from core.timezone import LOCAL_TIMEZONE, local_now, local_today
 from users.models import CustomUser, StudentProfile
 from users.permissions import get_object_institution_id
 from wallet.services import debit_wallet
 
 from .mixins import AllergenValidatorMixin, ParentalControlValidatorMixin
-from .models import PreOrder, PreOrderItem, Sale, SaleItem
+from .models import PreOrder, PreOrderItem, Sale, SaleCombo, SaleItem
 
 
 class SaleProcessor(AllergenValidatorMixin):
     """
     Template Method: process() fixes the sale flow (lock products -> validate
     customer -> register sale -> charge -> discount stock). Subclasses only
-    change who can be the customer and how the sale is charged.
+    change who can be the customer and how the sale is charged. Combos are
+    one line at their fixed price, but their products are locked, checked for
+    allergens and discounted from stock like the rest.
     """
     payment_method = None
     allowed_roles = ()
@@ -37,14 +39,21 @@ class SaleProcessor(AllergenValidatorMixin):
         self.customer = customer
 
     @transaction.atomic
-    def process(self, lines):
-        """`lines` is a list of (menu_item_id, quantity)."""
-        items = self._lock_items(lines)
+    def process(self, lines, combo_lines=()):
+        """`lines` is a list of (menu_item_id, quantity); `combo_lines` of (combo_id, quantity)."""
+        combos = ComboService.combos_for_sale(self.institution, combo_lines)
+        locked = self._lock_items(list(lines) + [
+            (combo_item.menu_item_id, combo_item.quantity * quantity)
+            for combo, quantity in combos
+            for combo_item in combo.items.all()
+        ])
+        items = self._standalone_items(lines, locked)
         # Promotions in force today lower the charged price (HU-03.3).
         prices = PromotionService.unit_prices([item for item, _quantity in items])
         total = sum((prices[item.id] * quantity for item, quantity in items), Decimal('0.00'))
+        total += sum((combo.price * quantity for combo, quantity in combos), Decimal('0.00'))
 
-        self.validate_customer(items, total)
+        self.validate_customer(locked, total)
 
         sale = Sale.objects.create(
             institution=self.institution,
@@ -57,8 +66,12 @@ class SaleProcessor(AllergenValidatorMixin):
             SaleItem(sale=sale, menu_item=item, quantity=quantity, price_at_purchase=prices[item.id])
             for item, quantity in items
         ])
+        SaleCombo.objects.bulk_create([
+            SaleCombo(sale=sale, combo=combo, name=combo.name, quantity=quantity, price_at_purchase=combo.price)
+            for combo, quantity in combos
+        ])
         self.charge(sale)
-        self._discount_stock(items)
+        self._discount_stock(locked)
         return sale
 
     def validate_customer(self, items, total):
@@ -102,6 +115,15 @@ class SaleProcessor(AllergenValidatorMixin):
                 })
             items.append((item, quantity))
         return items
+
+    @staticmethod
+    def _standalone_items(lines, locked):
+        """Products bought on their own (outside combos), as (item, quantity)."""
+        quantities = {}
+        for menu_item_id, quantity in lines:
+            quantities[menu_item_id] = quantities.get(menu_item_id, 0) + quantity
+        by_id = {item.id: item for item, _quantity in locked}
+        return [(by_id[menu_item_id], quantity) for menu_item_id, quantity in quantities.items()]
 
     def _discount_stock(self, items):
         for item, quantity in items:
@@ -150,8 +172,8 @@ PROCESSORS = {
 }
 
 
-def process_sale(payment_method, institution, cashier, customer, lines):
-    return PROCESSORS[payment_method](institution, cashier, customer).process(lines)
+def process_sale(payment_method, institution, cashier, customer, lines, combo_lines=()):
+    return PROCESSORS[payment_method](institution, cashier, customer).process(lines, combo_lines)
 
 
 def month_start_local(now=None):
@@ -551,17 +573,41 @@ class SalesAnalytics:
         return list(products.values())
 
     def top_products(self):
+        return self._rankings(self._product_totals())
+
+    # ---- combos -----------------------------------------------------------
+    def top_combos(self):
+        """Combos sold at the POS, each one as a single line at its own price
+        (grouped by the name saved on the sale, so deleted combos still count),
+        ranked like the products, plus the totals of the period."""
+        start, end = self._bounds(self.date_from, self.date_to)
+        lines = SaleCombo.objects.filter(sale__created_at__gte=start, sale__created_at__lt=end)
+        if self.institution is not None:
+            lines = lines.filter(sale__institution=self.institution)
+        combos = list(
+            lines.order_by().values('name').annotate(units=Sum('quantity'), revenue=Sum(_LINE_TOTAL))
+        )
+        return {
+            **self._rankings(combos),
+            'totals': {
+                'units': sum(combo['units'] for combo in combos),
+                'revenue': _money(sum((combo['revenue'] for combo in combos), _ZERO)),
+            },
+        }
+
+    @staticmethod
+    def _rankings(entries):
+        """Top `ANALYTICS_TOP_PRODUCTS_LIMIT` of {name, units, revenue} rows by revenue and by units."""
         limit = settings.ANALYTICS_TOP_PRODUCTS_LIMIT
-        products = self._product_totals()
 
         def ranking(sort_key):
-            ordered = sorted(products, key=sort_key)[:limit]
+            ordered = sorted(entries, key=sort_key)[:limit]
             return [
-                {'name': product['name'], 'units': product['units'], 'revenue': _money(product['revenue'])}
-                for product in ordered
+                {'name': entry['name'], 'units': entry['units'], 'revenue': _money(entry['revenue'])}
+                for entry in ordered
             ]
 
         return {
-            'by_revenue': ranking(lambda product: (-product['revenue'], product['name'])),
-            'by_units': ranking(lambda product: (-product['units'], product['name'])),
+            'by_revenue': ranking(lambda entry: (-entry['revenue'], entry['name'])),
+            'by_units': ranking(lambda entry: (-entry['units'], entry['name'])),
         }

@@ -238,6 +238,7 @@ class SaleCreateView(APIView):
             request.user,
             customer,
             [(item['menu_item_id'], item['quantity']) for item in data['items']],
+            [(combo['combo_id'], combo['quantity']) for combo in data['combos']],
         )
         return Response(SaleSerializer(sale).data, status=status.HTTP_201_CREATED)
 
@@ -254,7 +255,7 @@ class CreditHistoryView(APIView):
     def get(self, request):
         sales = Sale.objects.filter(
             customer=request.user, payment_method=Sale.PaymentMethod.CREDIT,
-        ).prefetch_related('items__menu_item')
+        ).prefetch_related('items__menu_item', 'combos')
         return Response({
             'month': local_now().strftime('%Y-%m'),
             'accumulated_total': str(monthly_credit_total(request.user)),
@@ -277,7 +278,7 @@ class ParentSaleListView(generics.ListAPIView):
     def get_queryset(self):
         queryset = Sale.objects.filter(
             customer__student_profile__parent=self.request.user.parent_profile,
-        ).select_related('customer__student_profile').prefetch_related('items__menu_item')
+        ).select_related('customer__student_profile').prefetch_related('items__menu_item', 'combos')
 
         student_id = self.request.query_params.get('student_id')
         if student_id:
@@ -327,3 +328,10 @@ class TopProductsView(BaseAnalyticsView):
 
     def build(self, analytics, params):
         return analytics.top_products()
+
+
+class TopCombosView(BaseAnalyticsView):
+    """GET /api/pos/analytics/top-combos/ - combos sold: rankings and totals."""
+
+    def build(self, analytics, params):
+        return analytics.top_combos()
