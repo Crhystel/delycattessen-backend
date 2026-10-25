@@ -110,6 +110,13 @@ class IsTeacherUser(RolePermission):
     allowed_roles = (CustomUser.Role.TEACHER,)
 
 
+class CanEditOwnProfile(RolePermission):
+    """Parents and teachers keep their own profile up to date (HU of profile
+    edition); the other roles are managed by an administrator."""
+    message = _('Solo los padres de familia y los docentes pueden editar su perfil.')
+    allowed_roles = (CustomUser.Role.PARENT, CustomUser.Role.TEACHER)
+
+
 class IsParentOfStudent(BasePermission):
     message = _('No tienes permiso sobre este estudiante')
 

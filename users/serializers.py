@@ -146,8 +146,9 @@ class MeSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = (
-            'id', 'email', 'first_name', 'last_name', 'role', 'institution',
-            'institution_name', 'has_children', 'has_payment_pin', 'must_change_password',
+            'id', 'email', 'first_name', 'second_name', 'last_name', 'second_last_name',
+            'role', 'institution', 'institution_name', 'has_children', 'has_payment_pin',
+            'must_change_password',
         )
     def get_has_children(self, obj):
         return hasattr(obj, 'parent_profile') and obj.parent_profile.children.exists()
@@ -234,9 +235,52 @@ class StudentRegistrationSerializer(UppercaseNamesMixin,serializers.Serializer):
         return register_student(self.context['parent_profile'], validated_data)
 
 
+class ProfileUpdateSerializer(UppercaseNamesMixin, serializers.ModelSerializer):
+    """
+    Own profile of a parent or teacher: the four name parts (uppercased like
+    every registered name) and the email, which is also the login, so it must
+    stay unique.
+    """
+    uppercase_fields = ('first_name', 'second_name', 'last_name', 'second_last_name')
+    first_name = serializers.CharField(max_length=150)
+    last_name = serializers.CharField(max_length=150)
+    email = serializers.EmailField()
+
+    class Meta:
+        model = User
+        fields = ('first_name', 'second_name', 'last_name', 'second_last_name', 'email')
+
+    def validate_email(self, value):
+        value = value.lower()
+        taken = CustomUser.objects.filter(email__iexact=value).exclude(pk=self.instance.pk)
+        if taken.exists():
+            raise serializers.ValidationError(_('Ya existe una cuenta con este correo.'))
+        return value
+
+
+class ChildProfileUpdateSerializer(UppercaseNamesMixin, serializers.ModelSerializer):
+    """Data of a child the parent can edit: name parts and username (the
+    photo has its own endpoint because it also updates the biometrics)."""
+    uppercase_fields = ('first_name', 'second_name', 'last_name', 'second_last_name')
+    first_name = serializers.CharField(max_length=150)
+    last_name = serializers.CharField(max_length=150)
+
+    class Meta:
+        model = User
+        fields = ('first_name', 'second_name', 'last_name', 'second_last_name', 'username')
+
+    def validate_username(self, value):
+        if CustomUser.objects.filter(username=value).exclude(pk=self.instance.pk).exists():
+            raise serializers.ValidationError(_('Ese nombre de usuario ya está en uso.'))
+        return value
+
+
 class ChildSerializer(serializers.ModelSerializer):
     first_name = serializers.CharField(source='user.first_name')
+    second_name = serializers.CharField(source='user.second_name', read_only=True)
     last_name = serializers.CharField(source='user.last_name')
+    second_last_name = serializers.CharField(source='user.second_last_name', read_only=True)
+    username = serializers.CharField(source='user.username', read_only=True)
     institution_name = serializers.CharField(source='institution.name', read_only=True)
     profile_picture = serializers.ImageField(read_only=True)
     balance = serializers.SerializerMethodField()
@@ -244,7 +288,10 @@ class ChildSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = StudentProfile
-        fields = ('id', 'first_name', 'last_name', 'institution_name', 'profile_picture', 'balance', 'wallet_id')
+        fields = (
+            'id', 'first_name', 'second_name', 'last_name', 'second_last_name', 'username',
+            'institution_name', 'profile_picture', 'balance', 'wallet_id',
+        )
 
     def get_balance(self, obj):
         wallet = getattr(obj, 'wallet', None)

@@ -55,7 +55,7 @@ Una flecha `A ◄── B` significa "B puede importar de A". **No hay imports c
 
 | Prefijo | Contenido |
 |---|---|
-| `/api/users/` | Registro de padre y estudiante, login, `me`, hijos, alergias, control parental, PIN de pago, QR (`qr/token/`), biometría (`biometrics/register/`), reset de contraseña, gestión de personal (`staff/`) |
+| `/api/users/` | Registro de padre y estudiante, login, `me` (y `me/profile/` para que padre y docente editen sus datos), hijos (`children/<id>/` para que el padre edite nombres y usuario), alergias, control parental, PIN de pago, QR (`qr/token/`), biometría (`biometrics/register/`), reset de contraseña, gestión de personal (`staff/`) |
 | `/api/catalog/` | Menú, productos, ingredientes, alérgenos, platillos, menús mensuales (publicar/despublicar), menú del estudiante y del POS, descuentos (`promotions/`, vigentes en `promotions/active/`) y combos (`combos/`, vigentes en `combos/active/`) |
 | `/api/wallet/` | `recharge/`, `recharge/gateway/`, transacciones, callbacks de Payphone, webhook de Kushki |
 | `/api/pos/` | Preórdenes, ventas, historial, crédito docente, `identify/face/`, `identify/qr/`, analítica de ventas para el administrador (`analytics/summary/`, `analytics/timeseries/`, `analytics/top-products/`, `analytics/top-combos/`) |

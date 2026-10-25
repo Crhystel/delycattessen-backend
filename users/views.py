@@ -21,6 +21,7 @@ from core.mixins import InstitutionScopeMixin
 from .mixins import TokenGeneratorMixin
 from .models import CustomUser, Institution, ParentalControl, StudentProfile
 from .permissions import (
+    CanEditOwnProfile,
     CanManageStaffAccount,
     CanRegisterBiometric,
     CanRequestPasswordReset,
@@ -35,6 +36,7 @@ from .permissions import (
 from .serializers import (
     AllergenSerializer,
     ChangePasswordSerializer,
+    ChildProfileUpdateSerializer,
     ChildSerializer,
     CreateStaffSerializer,
     EmailTokenObtainSerializer,
@@ -43,6 +45,7 @@ from .serializers import (
     ParentalControlSerializer,
     ParentRegistrationSerializer,
     PasswordResetConfirmSerializer,
+    ProfileUpdateSerializer,
     PasswordResetRequestSerializer,
     SetPaymentPinSerializer,
     StudentRegistrationSerializer,
@@ -155,6 +158,24 @@ class MeView(generics.RetrieveAPIView):
     def get_object(self):
         return self.request.user
     
+class ProfileUpdateView(generics.UpdateAPIView):
+    """
+    PATCH /api/users/me/profile/
+    A parent or teacher edits their own names and email; answers with the
+    same shape as GET /api/users/me/.
+    """
+    serializer_class = ProfileUpdateSerializer
+    permission_classes = [IsAuthenticated, CanEditOwnProfile]
+    http_method_names = ['patch']
+
+    def get_object(self):
+        return self.request.user
+
+    def update(self, request, *args, **kwargs):
+        super().update(request, *args, **kwargs)  # PATCH: partial update
+        return Response(MeSerializer(self.request.user).data)
+
+
 class ParentRegistrationView(APIView):
     permission_classes = [AllowAny]
 
@@ -197,6 +218,21 @@ class ChildrenListView(generics.ListAPIView):
 
     def get_queryset(self):
         return self.request.user.parent_profile.children.all()
+
+
+class ChildProfileUpdateView(APIView):
+    """
+    PATCH /api/users/children/<student_id>/
+    The parent edits a child's names and username.
+    """
+    permission_classes = [IsAuthenticated, IsParentOfStudent]
+
+    def patch(self, request, student_id):
+        student_profile = get_object_or_404(StudentProfile.objects.select_related('user'), pk=student_id)
+        serializer = ChildProfileUpdateSerializer(student_profile.user, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(ChildSerializer(student_profile).data)
 
 
 class ChildPhotoUpdateView(APIView):
