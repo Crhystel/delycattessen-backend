@@ -93,6 +93,35 @@ class ParentSaleSerializer(SaleSerializer):
         return f"{user.first_name} {user.last_name}".strip() or user.username
 
 
+class TeacherCreditRowSerializer(serializers.Serializer):
+    """One teacher (in one institution) of the monthly credit report, with each sale."""
+    teacher_id = serializers.IntegerField(source='teacher.id')
+    full_name = serializers.CharField()
+    email = serializers.EmailField(source='teacher.email', allow_null=True)
+    institution_name = serializers.CharField(source='institution.name')
+    consumptions = serializers.SerializerMethodField()
+    total = serializers.DecimalField(max_digits=10, decimal_places=2)
+    sales = SaleSerializer(many=True)
+
+    def get_consumptions(self, row) -> int:
+        return len(row['sales'])
+
+
+class TeacherCreditTotalsSerializer(serializers.Serializer):
+    teachers = serializers.IntegerField()
+    consumptions = serializers.IntegerField()
+    amount = serializers.DecimalField(max_digits=10, decimal_places=2)
+
+
+class TeacherCreditReportSerializer(serializers.Serializer):
+    """Credit consumptions of the current month until the moment it is generated."""
+    date_from = serializers.DateField()
+    date_to = serializers.DateField()
+    generated_at = serializers.DateTimeField()
+    teachers = TeacherCreditRowSerializer(many=True)
+    totals = TeacherCreditTotalsSerializer()
+
+
 class AnalyticsQuerySerializer(serializers.Serializer):
     """Inclusive range of local dates for the sales analytics; defaults to the current month."""
     date_from = serializers.DateField(required=False)

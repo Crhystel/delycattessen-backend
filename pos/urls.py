@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import (PreOrderCreateView, POSFaceIdentificationView, POSQrIdentificationView, PreOrderListView, PreOrderDeliverView, SaleCreateView, CreditHistoryView, ParentSaleListView, SalesSummaryView, SalesTimeseriesView, TopProductsView, TopCombosView)
+from .views import (PreOrderCreateView, POSFaceIdentificationView, POSQrIdentificationView, PreOrderListView, PreOrderDeliverView, SaleCreateView, CreditHistoryView, ParentSaleListView, SalesSummaryView, SalesTimeseriesView, TopProductsView, TopCombosView, TeacherCreditReportView)
 
 urlpatterns = [
     path('preorder/', PreOrderCreateView.as_view(), name='preorder_create'),
@@ -12,6 +12,7 @@ urlpatterns = [
     path('analytics/timeseries/', SalesTimeseriesView.as_view(), name='analytics_timeseries'),
     path('analytics/top-products/', TopProductsView.as_view(), name='analytics_top_products'),
     path('analytics/top-combos/', TopCombosView.as_view(), name='analytics_top_combos'),
+    path('reports/teacher-credit/', TeacherCreditReportView.as_view(), name='teacher_credit_report'),
     path('identify/face/', POSFaceIdentificationView.as_view(), name='pos_identify_face'),
     path('identify/qr/', POSQrIdentificationView.as_view(), name='pos_identify_qr'),
 ]

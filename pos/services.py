@@ -182,6 +182,52 @@ def month_start_local(now=None):
     return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
 
+def full_name(user):
+    """The four name parts that are filled in, in order."""
+    parts = (user.first_name, user.second_name, user.last_name, user.second_last_name)
+    return ' '.join(part for part in parts if part).strip() or user.username
+
+
+def teacher_credit_report(institution, now=None):
+    """
+    Credit consumptions of the teachers from day 1 of the current month until
+    `now` (HU-08.2), one row per teacher and institution with each sale, plus
+    the totals. `institution=None` consolidates every institution. Teachers
+    deactivated later still appear: their consumption happened.
+    """
+    now = now or local_now()
+    date_from = month_start_local(now)
+    sales = Sale.objects.filter(
+        payment_method=Sale.PaymentMethod.CREDIT, created_at__gte=date_from, created_at__lte=now,
+    ).select_related('customer', 'institution').prefetch_related('items__menu_item', 'combos')
+    if institution is not None:
+        sales = sales.filter(institution=institution)
+
+    rows = {}
+    for sale in sales.order_by('created_at'):
+        row = rows.setdefault((sale.customer_id, sale.institution_id), {
+            'teacher': sale.customer,
+            'full_name': full_name(sale.customer),
+            'institution': sale.institution,
+            'sales': [],
+            'total': Decimal('0.00'),
+        })
+        row['sales'].append(sale)
+        row['total'] += sale.total_amount
+    teachers = sorted(rows.values(), key=lambda row: (row['full_name'].casefold(), row['institution'].name))
+    return {
+        'date_from': date_from.date(),
+        'date_to': now.date(),
+        'generated_at': now,
+        'teachers': teachers,
+        'totals': {
+            'teachers': len({row['teacher'].pk for row in teachers}),
+            'consumptions': sum(len(row['sales']) for row in teachers),
+            'amount': sum((row['total'] for row in teachers), Decimal('0.00')),
+        },
+    }
+
+
 def monthly_credit_total(customer):
     """What a teacher has accumulated on institutional credit this month."""
     total = Sale.objects.filter(

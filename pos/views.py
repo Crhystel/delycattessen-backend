@@ -21,7 +21,7 @@ from users.services import QrTokenExpired, QrTokenInvalid, decode_qr_token
 from .models import PreOrder, Sale
 from .serializers import (
     AnalyticsQuerySerializer, AnalyticsTimeseriesQuerySerializer, ParentSaleSerializer, PreOrderCreateSerializer,
-    PreOrderListSerializer, SaleCreateSerializer, SaleSerializer,
+    PreOrderListSerializer, SaleCreateSerializer, SaleSerializer, TeacherCreditReportSerializer,
 )
 from .services import (
     PreOrderCreator,
@@ -31,6 +31,7 @@ from .services import (
     deliver_preorder,
     monthly_credit_total,
     process_sale,
+    teacher_credit_report,
 )
 
 logger = logging.getLogger(__name__)
@@ -285,6 +286,20 @@ class ParentSaleListView(generics.ListAPIView):
             queryset = queryset.filter(customer__student_profile__id=student_id)
 
         return queryset.order_by('-created_at')[:self.max_results]
+
+
+class TeacherCreditReportView(APIView):
+    """
+    GET /api/pos/reports/teacher-credit/
+    Teachers' credit consumptions from day 1 of the current month until now
+    (HU-08.2), for the administrator to send to Human Resources. Scope: the
+    admin's institution, ?institution=<id> or ?institution=all.
+    """
+    permission_classes = [IsAuthenticated, IsAdministrator]
+
+    def get(self, request):
+        report = teacher_credit_report(resolve_institution_scope(request))
+        return Response(TeacherCreditReportSerializer(report).data)
 
 
 class BaseAnalyticsView(APIView):
