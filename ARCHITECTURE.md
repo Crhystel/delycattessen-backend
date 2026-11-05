@@ -5,7 +5,7 @@ API REST del sistema de ventas y control de servicios alimentarios de D'Elycatte
 ## 1. Qué hace el sistema
 
 - **Padres** registran a sus hijos (estudiantes), recargan una billetera, preordenan el menú del día, configuran controles parentales y alergias.
-- **Estudiantes y docentes** se identifican en el punto de venta (POS) con **reconocimiento facial** o un **QR dinámico**.
+- **Estudiantes** se identifican en el punto de venta (POS) con **reconocimiento facial** o un **QR dinámico**; los **docentes** solo con el QR dinámico (no tienen biometría) y compran en efectivo o a crédito.
 - **Personal operativo** vende en el POS (efectivo, saldo, crédito docente) y entrega preórdenes.
 - **Administradores** gestionan el personal, el catálogo y los menús mensuales de su institución.
 
@@ -55,7 +55,7 @@ Una flecha `A ◄── B` significa "B puede importar de A". **No hay imports c
 
 | Prefijo | Contenido |
 |---|---|
-| `/api/users/` | Registro de padre y estudiante, login, `me` (y `me/profile/` para que padre y docente editen sus datos), hijos (`children/<id>/` para que el padre edite nombres y usuario), alergias, control parental, PIN de pago, QR (`qr/token/`), biometría (`biometrics/register/`), reset de contraseña, gestión de personal (`staff/`) |
+| `/api/users/` | Registro de padre y estudiante, login, `me` (y `me/profile/` para que padre y docente editen sus datos; cambiar el correo exige la contraseña actual en `current_password`), `change-password/`, hijos (`children/<id>/` para que el padre edite nombres y usuario), alergias, control parental, PIN de pago, QR (`qr/token/`), biometría (`biometrics/register/`), reset de contraseña, gestión de personal (`staff/`) |
 | `/api/catalog/` | Menú, productos, ingredientes, alérgenos, platillos, menús mensuales (publicar/despublicar), menú del estudiante y del POS, descuentos (`promotions/`, vigentes en `promotions/active/`) y combos (`combos/`, vigentes en `combos/active/`) |
 | `/api/wallet/` | `recharge/`, `recharge/gateway/`, transacciones, callbacks de Payphone, webhook de Kushki |
 | `/api/pos/` | Preórdenes, ventas, historial, crédito docente, `identify/face/`, `identify/qr/`, analítica de ventas para el administrador (`analytics/summary/`, `analytics/timeseries/`, `analytics/top-products/`, `analytics/top-combos/`) y reporte mensual de crédito docente (`reports/teacher-credit/`, con su exportación a Excel por cola en `reports/teacher-credit/exports/`) |
@@ -88,7 +88,7 @@ Un `Combo` agrupa productos a un precio fijo (p. ej. sánduche + cola a $3.50). 
 - Un mismo rostro no puede registrarse para dos personas de la misma institución (`FaceAlreadyRegistered`, 409).
 
 ### 5.6 Recuperación de contraseña
-Solicitar código → generar (`secrets`) → enviar por correo (Celery) → confirmar. La respuesta es idéntica para correos que no existen, hay un máximo de intentos por código y un límite de llamadas por correo (`CanRequestPasswordReset`). `BasePasswordResetView` es el Template Method; el cambio de contraseña autenticado reutiliza su estructura.
+Solicitar código → generar (`secrets`) → enviar por correo (Celery) → confirmar. La respuesta es idéntica para correos que no existen, hay un máximo de intentos por código y un límite de llamadas por correo (`CanRequestPasswordReset`). `BasePasswordResetView` es el Template Method; el cambio de contraseña autenticado reutiliza su estructura. Tanto el cambio como la recuperación ponen en lista negra los refresh tokens del usuario (`revoke_user_tokens`); `change-password/` devuelve tokens nuevos para el dispositivo que hizo el cambio (`rotate_user_tokens`) y limita los intentos por usuario (scope `change_password`, `CHANGE_PASSWORD_THROTTLE_RATE`). Cambiar el correo desde `me/profile/` también exige la contraseña actual (se valida en `ProfileUpdateSerializer`) y esos intentos comparten el mismo límite.
 
 ### 5.7 Analítica de ventas (dashboard del administrador)
 `SalesAnalytics` (`pos/services.py`) calcula las métricas bajo demanda sobre la base de datos, sin caché: el panel las vuelve a pedir cada pocos segundos. `BaseAnalyticsView` es el Template Method (validar rango → resolver sede → construir la métrica) y solo lo lee el rol `ADMIN`. La sede es la propia, `?institution=<id>` o `?institution=all` (consolidado). Parámetros: `date_from` y `date_to` (inclusivos, por defecto el mes actual; máximo `ANALYTICS_MAX_RANGE_DAYS`) y, en `timeseries`, `granularity` (`day`, `week`, `month`). El detalle de un día/semana/mes se obtiene pidiendo los mismos endpoints con el rango de ese bucket (cada fila de `timeseries` trae su `date_from`/`date_to`).

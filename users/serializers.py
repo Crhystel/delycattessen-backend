@@ -245,10 +245,16 @@ class ProfileUpdateSerializer(UppercaseNamesMixin, serializers.ModelSerializer):
     first_name = serializers.CharField(max_length=150)
     last_name = serializers.CharField(max_length=150)
     email = serializers.EmailField()
+    # Only needed (and checked) when the email changes; it is never stored.
+    current_password = serializers.CharField(
+        write_only=True, required=False, trim_whitespace=False, style={'input_type': 'password'}
+    )
 
     class Meta:
         model = User
-        fields = ('first_name', 'second_name', 'last_name', 'second_last_name', 'email')
+        fields = (
+            'first_name', 'second_name', 'last_name', 'second_last_name', 'email', 'current_password',
+        )
 
     def validate_email(self, value):
         value = value.lower()
@@ -256,6 +262,22 @@ class ProfileUpdateSerializer(UppercaseNamesMixin, serializers.ModelSerializer):
         if taken.exists():
             raise serializers.ValidationError(_('Ya existe una cuenta con este correo.'))
         return value
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        current_password = attrs.pop('current_password', None)
+        new_email = attrs.get('email')
+        if new_email is not None and new_email != (self.instance.email or '').lower():
+            # The email is also the login: changing it needs the current credentials.
+            if not current_password:
+                raise serializers.ValidationError({
+                    'current_password': _('Ingresa tu contraseña actual para cambiar el correo.'),
+                })
+            if not self.instance.check_password(current_password):
+                raise serializers.ValidationError({
+                    'current_password': _('La contraseña actual es incorrecta.'),
+                })
+        return attrs
 
 
 class ChildProfileUpdateSerializer(UppercaseNamesMixin, serializers.ModelSerializer):
