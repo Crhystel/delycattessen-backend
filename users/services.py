@@ -10,6 +10,8 @@ from django.db import transaction
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from rest_framework.exceptions import ValidationError
+from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from core.biometrics import BiometricValidationMixin
 
@@ -43,6 +45,22 @@ def soft_delete_account(user):
     UserBiometric.objects.filter(user=user).delete()
     user.allergies.clear()
     return user
+
+
+def revoke_user_tokens(user):
+    """Blacklists every refresh token of `user`: after a credential change no
+    other device can renew its session (its access token expires on its own)."""
+    for outstanding in OutstandingToken.objects.filter(user=user, blacklistedtoken__isnull=True):
+        BlacklistedToken.objects.get_or_create(token=outstanding)
+
+
+@transaction.atomic
+def rotate_user_tokens(user):
+    """Revokes every refresh token of `user` and issues a new one so the device
+    that changed the password keeps its session. Returns the new tokens."""
+    revoke_user_tokens(user)
+    refresh = RefreshToken.for_user(user)
+    return {'access': str(refresh.access_token), 'refresh': str(refresh)}
 
 
 def generate_temporary_password(length=12):
