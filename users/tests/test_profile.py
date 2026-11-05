@@ -1,5 +1,10 @@
+from unittest import mock
+
+from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import override_settings
 from rest_framework.test import APITestCase
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from users.models import CustomUser, Institution, ParentProfile, StudentProfile
@@ -9,6 +14,8 @@ GIF = (
     b'\x01\x00\x00\x00\x00\x2c\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x44\x01\x00\x3b'
 )
 PROFILE = '/api/users/me/profile/'
+LOCMEM_CACHE = {'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}}
+PASSWORD = 'Old-Passw0rd!'
 
 
 class ProfileEditionTests(APITestCase):
@@ -17,11 +24,11 @@ class ProfileEditionTests(APITestCase):
     def setUp(self):
         make = CustomUser.objects.create_user
         institution = Institution.objects.create(name='Sede A')
-        self.teacher = make(username='teacher', email='t@x.com', password='x',
+        self.teacher = make(username='teacher', email='t@x.com', password=PASSWORD,
                             role=CustomUser.Role.TEACHER, institution=institution)
         self.staff = make(username='staff', email='staff@x.com', password='x',
                           role=CustomUser.Role.OPERATIONS_STAFF, institution=institution)
-        self.parent_user = make(username='parent', email='p@x.com', password='x', role=CustomUser.Role.PARENT)
+        self.parent_user = make(username='parent', email='p@x.com', password=PASSWORD, role=CustomUser.Role.PARENT)
         parent = ParentProfile.objects.create(user=self.parent_user)
         self.other_parent_user = make(username='other', email='o@x.com', password='x', role=CustomUser.Role.PARENT)
         ParentProfile.objects.create(user=self.other_parent_user)
@@ -42,7 +49,7 @@ class ProfileEditionTests(APITestCase):
         self._auth(self.parent_user)
         response = self.client.patch(PROFILE, {
             'first_name': 'maría', 'second_name': 'josé', 'last_name': 'López',
-            'second_last_name': '', 'email': 'Nuevo@X.com',
+            'second_last_name': '', 'email': 'Nuevo@X.com', 'current_password': PASSWORD,
         }, format='json')
         self.assertEqual(response.status_code, 200, response.data)
         self.assertEqual(
@@ -64,9 +71,63 @@ class ProfileEditionTests(APITestCase):
 
     def test_email_must_be_unique(self):
         self._auth(self.parent_user)
-        response = self.client.patch(PROFILE, {'email': 'T@x.com'}, format='json')
+        response = self.client.patch(PROFILE, {'email': 'T@x.com', 'current_password': PASSWORD}, format='json')
         self.assertEqual(response.status_code, 400)
         self.assertEqual(self.client.patch(PROFILE, {'email': 'p@x.com'}, format='json').status_code, 200)
+
+    # ---- email change needs the current password ---------------------------
+    def test_email_change_requires_the_current_password(self):
+        self._auth(self.parent_user)
+        response = self.client.patch(PROFILE, {'email': 'nuevo@x.com'}, format='json')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('current_password', response.data)
+        self.parent_user.refresh_from_db()
+        self.assertEqual(self.parent_user.email, 'p@x.com')
+
+    def test_email_change_with_a_wrong_password_is_rejected(self):
+        self._auth(self.parent_user)
+        response = self.client.patch(
+            PROFILE, {'email': 'nuevo@x.com', 'current_password': 'Wrong-Passw0rd!'}, format='json',
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('current_password', response.data)
+        self.parent_user.refresh_from_db()
+        self.assertEqual(self.parent_user.email, 'p@x.com')
+
+    def test_email_change_with_the_right_password_works_and_stores_no_password(self):
+        self._auth(self.parent_user)
+        response = self.client.patch(
+            PROFILE, {'email': 'nuevo@x.com', 'current_password': PASSWORD}, format='json',
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data['email'], 'nuevo@x.com')
+        self.assertNotIn('current_password', response.data)
+        self.parent_user.refresh_from_db()
+        self.assertTrue(self.parent_user.check_password(PASSWORD))
+
+    def test_no_password_is_needed_when_the_email_does_not_change(self):
+        self._auth(self.parent_user)
+        for payload in ({'first_name': 'Ana'}, {'email': 'P@X.com', 'first_name': 'Ana'}):
+            with self.subTest(payload=payload):
+                self.assertEqual(self.client.patch(PROFILE, payload, format='json').status_code, 200)
+
+    @override_settings(CACHES=LOCMEM_CACHE)
+    def test_password_attempts_to_change_the_email_are_limited(self):
+        cache.clear()
+        self._auth(self.parent_user)
+        wrong = {'email': 'nuevo@x.com', 'current_password': 'Wrong-Passw0rd!'}
+        with mock.patch.object(ScopedRateThrottle, 'THROTTLE_RATES', {'change_password': '3/hour'}):
+            statuses = [self.client.patch(PROFILE, wrong, format='json').status_code for _unused in range(4)]
+            right = self.client.patch(
+                PROFILE, {'email': 'nuevo@x.com', 'current_password': PASSWORD}, format='json',
+            ).status_code
+            names = self.client.patch(PROFILE, {'first_name': 'Ana'}, format='json').status_code
+
+        self.assertEqual(statuses, [400, 400, 400, 429])
+        self.assertEqual(right, 429)
+        self.assertEqual(names, 200)  # editing names never spends attempts
+        self.parent_user.refresh_from_db()
+        self.assertEqual(self.parent_user.email, 'p@x.com')
 
     def test_required_names_cannot_be_blank(self):
         self._auth(self.parent_user)

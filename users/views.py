@@ -166,11 +166,19 @@ class ProfileUpdateView(generics.UpdateAPIView):
     """
     PATCH /api/users/me/profile/
     A parent or teacher edits their own names and email; answers with the
-    same shape as GET /api/users/me/.
+    same shape as GET /api/users/me/. Changing the email requires the current
+    password, so those attempts are rate limited (scope `change_password`)
+    while plain name edits are not.
     """
     serializer_class = ProfileUpdateSerializer
     permission_classes = [IsAuthenticated, CanEditOwnProfile]
     http_method_names = ['patch']
+    throttle_scope = 'change_password'
+
+    def get_throttles(self):
+        if 'current_password' in self.request.data:
+            return [ScopedRateThrottle()]
+        return []
 
     def get_object(self):
         return self.request.user
