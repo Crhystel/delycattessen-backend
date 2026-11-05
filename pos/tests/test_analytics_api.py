@@ -1,4 +1,4 @@
-ñfrom datetime import date
+from datetime import date
 
 from django.test import override_settings
 from rest_framework.test import APITestCase
