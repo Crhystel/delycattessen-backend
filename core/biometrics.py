@@ -180,14 +180,13 @@ class BiometricValidationMixin:
     ):
         """
         Cosine similarity between the candidate and every active biometric of
-        students (user__student_profile__institution) and teachers
-        (user__institution) of `institution`. Searching every
+        the students (user__student_profile__institution) of `institution`;
+        only students have face biometrics. Searching every
         institution requires the explicit all_institutions=True (admin
         consolidated view); a missing institution never widens the search.
         Returns (users, similarities) with users ordered by biometric id.
         """
         import numpy as np
-        from django.db.models import Q
         from users.models import CustomUser, UserBiometric
 
         if institution is None and not all_institutions:
@@ -195,12 +194,10 @@ class BiometricValidationMixin:
 
         qs = UserBiometric.objects.filter(
             is_active=True,
-            user__role__in=[CustomUser.Role.STUDENT, CustomUser.Role.TEACHER],
+            user__role=CustomUser.Role.STUDENT,
         ).order_by('id')
         if institution is not None:
-            qs = qs.filter(
-                Q(user__student_profile__institution=institution) | Q(user__institution=institution)
-            )
+            qs = qs.filter(user__student_profile__institution=institution)
         if exclude_user is not None:
             qs = qs.exclude(user=exclude_user)
         if active_users_only:
@@ -287,7 +284,7 @@ class BiometricValidationMixin:
     ) -> None:
         """
         Raises FaceAlreadyRegistered (409) if this face already belongs to
-        another student or teacher of the institution. Uses the same threshold
+        another student of the institution. Uses the same threshold
         the POS uses to recognize people, so a face accepted here can be told
         apart there. `exclude_user` is the owner (changing their own photo).
         """
