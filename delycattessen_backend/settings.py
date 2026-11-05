@@ -47,6 +47,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework',
     'rest_framework_simplejwt',
+    'rest_framework_simplejwt.token_blacklist',
     'users',
     'catalog',
     'wallet',
@@ -152,6 +153,10 @@ REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
+    'DEFAULT_THROTTLE_RATES': {
+        # Attempts per user to change the password (guessing the current one).
+        'change_password': config('CHANGE_PASSWORD_THROTTLE_RATE', default='5/hour'),
+    },
 }
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(hours=1),

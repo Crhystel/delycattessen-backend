@@ -9,6 +9,7 @@ from rest_framework.generics import get_object_or_404
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from rest_framework.viewsets import ModelViewSet
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -57,6 +58,8 @@ from .services import (
     create_staff_account,
     extract_unique_embedding,
     register_biometric,
+    revoke_user_tokens,
+    rotate_user_tokens,
     soft_delete_account,
     store_embedding,
     wallet_balance_of,
@@ -123,9 +126,9 @@ class BasePasswordResetView(generics.GenericAPIView):
     def post(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        self.process_recovery_action(serializer)
+        extra_data = self.process_recovery_action(serializer) or {}
         return Response(
-            {"message": str(self.success_message)},
+            {"message": str(self.success_message), **extra_data},
             status=status.HTTP_200_OK
         )
 
@@ -146,8 +149,9 @@ class ConfirmPasswordResetView(BasePasswordResetView):
     success_message = _('La contraseña ha sido restablecida exitosamente.')
 
     def process_recovery_action(self, serializer):
-        serializer.save()
-        
+        user = serializer.save()
+        revoke_user_tokens(user)
+
 class EmailTokenObtainPairView(TokenObtainPairView):
     serializer_class = EmailTokenObtainSerializer
     
@@ -388,8 +392,7 @@ class RegisterBiometricView(APIView):
     """
     POST /api/users/biometrics/register/
     Registers or updates the biometric facial vector of a student (by their
-    parent) or a teacher (by an admin of the same institution); see
-    CanRegisterBiometric. No other role has biometrics.
+    parent); see CanRegisterBiometric. No other role has biometrics.
     Strictly complies with Data Protection Laws:
     Extracts embedding vector, encrypts with AES-256-GCM, and destroys raw image in memory.
     """
@@ -436,10 +439,16 @@ class ChangePasswordView(BasePasswordResetView):
     login (must_change_password=True) y sirve como cambio de contraseña en
     general. Sigue el mismo Template Method que el resto del flujo de
     contraseñas (BasePasswordResetView.post ya valida y arma la respuesta;
-    aquí solo se define el paso que varía)."""
+    aquí solo se define el paso que varía). Limita los intentos (scope
+    `change_password`) para que una sesión robada no pueda adivinar la
+    contraseña actual, y cierra las demás sesiones devolviendo tokens nuevos
+    para el dispositivo que hizo el cambio."""
     serializer_class = ChangePasswordSerializer
     permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'change_password'
     success_message = _('Contraseña actualizada correctamente.')
 
     def process_recovery_action(self, serializer):
-        serializer.save()
+        user = serializer.save()
+        return rotate_user_tokens(user)
