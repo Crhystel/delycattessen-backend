@@ -112,3 +112,38 @@ class SaleCombo(models.Model):
 
     def __str__(self):
         return f'{self.quantity}x {self.name}'
+
+
+class ReportExport(models.Model):
+    """An Excel report generated in the background (Celery) for the administrator."""
+
+    class Status(models.TextChoices):
+        PENDING = 'PENDING', _('En cola')
+        PROCESSING = 'PROCESSING', _('Generando')
+        DONE = 'DONE', _('Listo')
+        FAILED = 'FAILED', _('Fallido')
+
+    ACTIVE_STATUSES = (Status.PENDING, Status.PROCESSING)
+
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, verbose_name=_('requested by'),
+        on_delete=models.CASCADE, related_name='report_exports',
+    )
+    institution = models.ForeignKey(
+        'users.Institution', verbose_name=_('institution'), on_delete=models.CASCADE,
+        related_name='report_exports', null=True, blank=True,
+        help_text=_('Empty for the consolidated view (every institution).'),
+    )
+    status = models.CharField(_('status'), max_length=12, choices=Status.choices, default=Status.PENDING)
+    file = models.FileField(_('file'), upload_to='exports/', blank=True)
+    error = models.CharField(_('error'), max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = _('report export')
+        verbose_name_plural = _('report exports')
+        indexes = [models.Index(fields=['requested_by', 'status'])]
+
+    def __str__(self):
+        return f'ReportExport {self.id} ({self.status})'

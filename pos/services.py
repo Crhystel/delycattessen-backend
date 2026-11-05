@@ -1,12 +1,20 @@
+import logging
+import os
+import tempfile
+import uuid
 from datetime import datetime, time, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 
+import xlsxwriter
 from django.conf import settings
 from django.core.cache import cache
+from django.core.files import File
 from django.db import transaction
 from django.db.models import Count, DecimalField, ExpressionWrapper, F, Sum
 from django.db.models.functions import TruncDate, TruncMonth, TruncWeek
-from django.utils.translation import gettext_lazy as _
+from django.utils.text import slugify
+from django.utils.translation import gettext, gettext_lazy as _
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from catalog.models import DailyMenu, MenuItem, MonthlyMenu
@@ -17,7 +25,10 @@ from users.permissions import get_object_institution_id
 from wallet.services import debit_wallet
 
 from .mixins import AllergenValidatorMixin, ParentalControlValidatorMixin
-from .models import PreOrder, PreOrderItem, Sale, SaleCombo, SaleItem
+from .models import PreOrder, PreOrderItem, ReportExport, Sale, SaleCombo, SaleItem
+from .tasks import build_teacher_credit_export_task
+
+logger = logging.getLogger(__name__)
 
 
 class SaleProcessor(AllergenValidatorMixin):
@@ -188,6 +199,14 @@ def full_name(user):
     return ' '.join(part for part in parts if part).strip() or user.username
 
 
+def teacher_credit_sales(institution, now):
+    """Credit sales from day 1 of the month until `now` (None = every institution)."""
+    sales = Sale.objects.filter(
+        payment_method=Sale.PaymentMethod.CREDIT, created_at__gte=month_start_local(now), created_at__lte=now,
+    )
+    return sales if institution is None else sales.filter(institution=institution)
+
+
 def teacher_credit_report(institution, now=None):
     """
     Credit consumptions of the teachers from day 1 of the current month until
@@ -197,11 +216,8 @@ def teacher_credit_report(institution, now=None):
     """
     now = now or local_now()
     date_from = month_start_local(now)
-    sales = Sale.objects.filter(
-        payment_method=Sale.PaymentMethod.CREDIT, created_at__gte=date_from, created_at__lte=now,
-    ).select_related('customer', 'institution').prefetch_related('items__menu_item', 'combos')
-    if institution is not None:
-        sales = sales.filter(institution=institution)
+    sales = teacher_credit_sales(institution, now).select_related(
+        'customer', 'institution').prefetch_related('items__menu_item', 'combos')
 
     rows = {}
     for sale in sales.order_by('created_at'):
@@ -226,6 +242,266 @@ def teacher_credit_report(institution, now=None):
             'amount': sum((row['total'] for row in teachers), Decimal('0.00')),
         },
     }
+
+
+TEACHER_ORDER = (
+    'customer__first_name', 'customer__second_name', 'customer__last_name', 'customer__second_last_name',
+    'customer_id', 'institution__name', 'institution_id',
+)
+
+
+class TeacherCreditExcelBuilder:
+    """
+    Writes the teachers' credit report (HU-08.2) as a styled .xlsx for Human
+    Resources: a "Resumen" sheet (one row per teacher and institution) and a
+    "Detalle" sheet (one row per sale). It streams (xlsxwriter constant_memory
+    + queryset iterator), so memory stays flat however many sales there are.
+    Text is always written as a string, so a name like "=cmd()" is never a formula.
+    """
+    SUMMARY_SHEET = 'Resumen'
+    DETAIL_SHEET = 'Detalle'
+    ITERATOR_CHUNK = 2000
+    FONT = 'Segoe UI'
+    INK, BLUE, DARK_BLUE, LIGHT_BLUE = '#0C1B2A', '#007ACC', '#005C99', '#E5F3FF'
+    GOLD, LIGHT_GOLD, LABEL_FILL, LINE = '#A87028', '#FEF8EC', '#EAE1F7', '#BFBFBF'
+    MONEY = '"$"#,##0.00'
+    TITLE_HEIGHT, KPI_HEIGHT, HEADER_HEIGHT, ROW_HEIGHT = 36, 24.6, 24, 22.05
+
+    def __init__(self, institution, institution_label, now):
+        self.institution = institution
+        self.institution_label = institution_label
+        self.now = now
+        self.date_from = month_start_local(now).date()
+        self.period = f'{self.date_from:%d/%m/%Y} - {now:%d/%m/%Y}'
+
+    def build(self, path):
+        workbook = xlsxwriter.Workbook(path, {'constant_memory': True})
+        workbook.set_properties({'title': gettext('Consumo a crédito docente'), 'company': "D'Elycattessen"})
+        self.workbook = workbook
+        self._formats = {}
+        self._write_summary(workbook.add_worksheet(self.SUMMARY_SHEET))
+        self._write_detail(workbook.add_worksheet(self.DETAIL_SHEET))
+        workbook.close()
+
+    def _fmt(self, **props):
+        """Cell format with the report's base look (font, thin border, centered vertically), cached by properties."""
+        key = tuple(sorted(props.items()))
+        if key not in self._formats:
+            base = {'font_name': self.FONT, 'font_size': 9, 'font_color': self.INK, 'valign': 'vcenter',
+                    'border': 1, 'border_color': self.LINE}
+            self._formats[key] = self.workbook.add_format({**base, **props})
+        return self._formats[key]
+
+    def _title(self, sheet, last_col, text):
+        sheet.set_row(1, self.TITLE_HEIGHT)
+        sheet.merge_range(1, 1, 1, last_col, text, self._fmt(
+            bold=True, font_size=13, font_color='#FFFFFF', bg_color=self.DARK_BLUE, align='center'))
+
+    def _meta(self, sheet, row, col, label, value):
+        sheet.write_string(row, col, label, self._fmt(bold=True, bg_color=self.LABEL_FILL))
+        sheet.write_string(row, col + 1, value, self._fmt())
+
+    def _headers(self, sheet, row, headers):
+        sheet.set_row(row, self.HEADER_HEIGHT)
+        for offset, (text, align) in enumerate(headers):
+            sheet.write_string(row, 1 + offset, text, self._fmt(
+                bold=True, font_size=10, font_color='#FFFFFF', bg_color=self.BLUE, align=align))
+
+    def _total_cell(self, sheet, row, col, first, last, value, money):
+        letter = xlsxwriter.utility.xl_col_to_name(col)
+        formula = f'=SUM({letter}{first}:{letter}{last})' if last >= first else '=0'
+        fmt = self._fmt(bold=True, bg_color=self.LIGHT_GOLD, num_format=self.MONEY if money else '#,##0',
+                        align='right' if money else 'center')
+        sheet.write_formula(row, col, formula, fmt, float(value))
+
+    def _total_label(self, sheet, row, last_label_col):
+        fmt = self._fmt(bold=True, bg_color=self.LIGHT_GOLD, align='left')
+        sheet.set_row(row, self.HEADER_HEIGHT)
+        sheet.merge_range(row, 1, row, last_label_col, gettext('Total general'), fmt)
+
+    def _summary_rows(self):
+        return list(
+            teacher_credit_sales(self.institution, self.now)
+            .values(
+                'customer_id', 'institution_id', 'institution__name', 'customer__username', 'customer__email',
+                'customer__first_name', 'customer__second_name', 'customer__last_name',
+                'customer__second_last_name',
+            )
+            .annotate(consumptions=Count('id'), total=Sum('total_amount'))
+            .order_by(*TEACHER_ORDER)
+        )
+
+    def _write_summary(self, sheet):
+        rows = self._summary_rows()
+        total_amount = sum((row['total'] for row in rows), Decimal('0.00'))
+        total_sales = sum(row['consumptions'] for row in rows)
+
+        for col, width in enumerate((3, 28, 26, 18, 16, 16)):
+            sheet.set_column(col, col, width)
+        sheet.set_landscape()
+        sheet.set_paper(9)
+        sheet.fit_to_pages(1, 0)
+        self._title(sheet, 5, gettext('REPORTE DE CONSUMOS A CRÉDITO DOCENTE'))
+        self._meta(sheet, 3, 1, gettext('Sede:'), self.institution_label)
+        self._meta(sheet, 3, 4, gettext('Generado:'), f'{self.now:%d/%m/%Y %H:%M}')
+        self._meta(sheet, 4, 1, gettext('Periodo:'), self.period)
+
+        blue = {'bold': True, 'font_size': 8, 'font_color': self.DARK_BLUE, 'bg_color': self.LIGHT_BLUE,
+                'align': 'center'}
+        gold = {'bold': True, 'font_size': 8, 'font_color': self.GOLD, 'bg_color': self.LIGHT_GOLD, 'align': 'center'}
+        sheet.write_string(6, 1, gettext('DOCENTES'), self._fmt(**blue))
+        sheet.write_string(6, 2, gettext('CONSUMOS'), self._fmt(**blue))
+        sheet.merge_range(6, 3, 6, 4, gettext('TOTAL A CONSOLIDAR'), self._fmt(**gold))
+        sheet.set_row(7, self.KPI_HEIGHT)
+        value = {'bold': True, 'font_size': 16, 'align': 'center'}
+        teachers = len({row['customer_id'] for row in rows})
+        sheet.write_number(7, 1, teachers, self._fmt(**value, bg_color=self.LIGHT_BLUE, num_format='#,##0'))
+        sheet.write_number(7, 2, total_sales, self._fmt(**value, bg_color=self.LIGHT_BLUE, num_format='#,##0'))
+        sheet.merge_range(7, 3, 7, 4, float(total_amount), self._fmt(
+            **value, bg_color=self.LIGHT_GOLD, num_format=self.MONEY))
+
+        header_row = 9
+        self._headers(sheet, header_row, (
+            (gettext('Docente'), 'left'), (gettext('Correo Electrónico'), 'left'), (gettext('Sede'), 'left'),
+            (gettext('N.º Consumos'), 'center'), (gettext('Total'), 'center'),
+        ))
+        for index, row in enumerate(rows):
+            line = header_row + 1 + index
+            sheet.set_row(line, self.ROW_HEIGHT)
+            name = full_name(SimpleNamespace(
+                first_name=row['customer__first_name'], second_name=row['customer__second_name'],
+                last_name=row['customer__last_name'], second_last_name=row['customer__second_last_name'],
+                username=row['customer__username'],
+            ))
+            sheet.write_string(line, 1, name, self._fmt())
+            sheet.write_string(line, 2, row['customer__email'] or '', self._fmt())
+            sheet.write_string(line, 3, row['institution__name'], self._fmt())
+            sheet.write_number(line, 4, row['consumptions'], self._fmt(align='center'))
+            sheet.write_number(line, 5, float(row['total']), self._fmt(num_format=self.MONEY, align='right'))
+        first, last = header_row + 2, header_row + 1 + len(rows)
+        total_row = last
+        self._total_label(sheet, total_row, 3)
+        self._total_cell(sheet, total_row, 4, first, last, total_sales, money=False)
+        self._total_cell(sheet, total_row, 5, first, last, total_amount, money=True)
+
+    def _write_detail(self, sheet):
+        for col, width in enumerate((3, 28, 26, 18, 14, 10, 44, 15)):
+            sheet.set_column(col, col, width)
+        sheet.set_landscape()
+        sheet.set_paper(9)
+        sheet.fit_to_pages(1, 0)
+        self._title(sheet, 7, gettext('DETALLE DE CONSUMOS A CRÉDITO DOCENTE'))
+        self._meta(sheet, 3, 1, gettext('Sede:'), self.institution_label)
+        self._meta(sheet, 4, 1, gettext('Periodo:'), self.period)
+        header_row = 6
+        self._headers(sheet, header_row, (
+            (gettext('Docente'), 'left'), (gettext('Correo'), 'left'), (gettext('Sede'), 'left'),
+            (gettext('Fecha'), 'center'), (gettext('Hora'), 'center'), (gettext('Productos'), 'left'),
+            (gettext('Monto'), 'right'),
+        ))
+        sales = (
+            teacher_credit_sales(self.institution, self.now)
+            .select_related('customer', 'institution').prefetch_related('items__menu_item', 'combos')
+            .order_by(*TEACHER_ORDER, 'created_at', 'id')
+            .iterator(chunk_size=self.ITERATOR_CHUNK)
+        )
+        count, total = 0, Decimal('0.00')
+        for sale in sales:
+            line = header_row + 1 + count
+            when = sale.created_at.astimezone(LOCAL_TIMEZONE)
+            sheet.set_row(line, self.ROW_HEIGHT)
+            sheet.write_string(line, 1, full_name(sale.customer), self._fmt())
+            sheet.write_string(line, 2, sale.customer.email or '', self._fmt())
+            sheet.write_string(line, 3, sale.institution.name, self._fmt())
+            sheet.write_datetime(line, 4, when.date(), self._fmt(num_format='dd/mm/yyyy', align='center'))
+            sheet.write_datetime(line, 5, when.time().replace(second=0, microsecond=0),
+                                 self._fmt(num_format='hh:mm', align='center'))
+            sheet.write_string(line, 6, self._products(sale), self._fmt())
+            sheet.write_number(line, 7, float(sale.total_amount), self._fmt(num_format=self.MONEY, align='right'))
+            count += 1
+            total += sale.total_amount
+        first, last = header_row + 2, header_row + 1 + count
+        self._total_label(sheet, last, 6)
+        self._total_cell(sheet, last, 7, first, last, total, money=True)
+
+    @staticmethod
+    def _products(sale):
+        lines = [f'{item.quantity}× {item.menu_item.name}' for item in sale.items.all()]
+        lines += [f'{combo.quantity}× {combo.name}' for combo in sale.combos.all()]
+        return ', '.join(lines)
+
+
+def purge_report_exports(now=None):
+    """
+    Fails exports nobody picked up (PENDING longer than the queue timeout: the
+    Celery worker is down) or that never finished (stuck longer than the
+    timeout), and deletes the old ones with their files. Runs whenever an
+    export is requested or polled, so the web always ends up with an answer.
+    """
+    now = now or local_now()
+    for statuses, seconds, message in (
+        ((ReportExport.Status.PENDING,), settings.REPORT_EXPORT_QUEUE_TIMEOUT_SECONDS,
+         gettext('El servicio de reportes no está disponible en este momento. Intenta de nuevo más tarde.')),
+        (ReportExport.ACTIVE_STATUSES, settings.REPORT_EXPORT_TIMEOUT_SECONDS,
+         gettext('El reporte tardó demasiado. Intenta de nuevo.')),
+    ):
+        ReportExport.objects.filter(status__in=statuses, created_at__lt=now - timedelta(seconds=seconds)).update(
+            status=ReportExport.Status.FAILED, error=message, finished_at=now,
+        )
+    for export in ReportExport.objects.filter(created_at__lt=now - timedelta(days=settings.REPORT_EXPORT_TTL_DAYS)):
+        export.file.delete(save=False)
+        export.delete()
+
+
+def start_teacher_credit_export(user, institution):
+    """
+    Queues the Excel build of the teachers' credit report and returns the
+    export to poll. An unfinished export of the same user and scope is reused
+    instead of queueing a duplicate (double clicks, several tabs).
+    """
+    purge_report_exports()
+    active = ReportExport.objects.filter(
+        requested_by=user, institution=institution, status__in=ReportExport.ACTIVE_STATUSES,
+    ).first()
+    if active is not None:
+        return active
+    export = ReportExport.objects.create(requested_by=user, institution=institution)
+    transaction.on_commit(lambda: build_teacher_credit_export_task.delay(export.pk))
+    return export
+
+
+def teacher_credit_export_filename(export):
+    scope = slugify(export.institution.name) if export.institution else 'consolidado'
+    return f'consumo-docentes-{scope}-{(export.finished_at or local_now()).date().isoformat()}.xlsx'
+
+
+def run_teacher_credit_export(export_id):
+    """Celery task body: PENDING -> PROCESSING -> DONE, or FAILED with a user-safe message."""
+    export = ReportExport.objects.select_related('institution').filter(pk=export_id).first()
+    if export is None or export.status != ReportExport.Status.PENDING:
+        return
+    export.status = ReportExport.Status.PROCESSING
+    export.save(update_fields=['status'])
+    path = None
+    try:
+        now = local_now()
+        label = export.institution.name if export.institution else gettext('Todas las sedes')
+        with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as handle:
+            path = handle.name
+        TeacherCreditExcelBuilder(export.institution, label, now).build(path)
+        with open(path, 'rb') as built:
+            export.file.save(f'{uuid.uuid4().hex}.xlsx', File(built), save=False)
+        export.status, export.finished_at = ReportExport.Status.DONE, now
+        export.save()
+    except Exception:
+        logger.exception('Teacher credit export %s failed', export_id)
+        export.status = ReportExport.Status.FAILED
+        export.error = gettext('No se pudo generar el reporte. Intenta de nuevo.')
+        export.finished_at = local_now()
+        export.save(update_fields=['status', 'error', 'finished_at'])
+    finally:
+        if path and os.path.exists(path):
+            os.remove(path)
 
 
 def monthly_credit_total(customer):

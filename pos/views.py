@@ -1,5 +1,6 @@
 import logging
 
+from django.http import FileResponse
 from django.utils.translation import gettext_lazy as _
 from rest_framework import generics, status
 from rest_framework.exceptions import ValidationError
@@ -18,10 +19,12 @@ from users.permissions import (
 )
 from users.services import QrTokenExpired, QrTokenInvalid, decode_qr_token
 
-from .models import PreOrder, Sale
+from .models import PreOrder, ReportExport, Sale
+from .permissions import IsReportExportOwner
 from .serializers import (
     AnalyticsQuerySerializer, AnalyticsTimeseriesQuerySerializer, ParentSaleSerializer, PreOrderCreateSerializer,
-    PreOrderListSerializer, SaleCreateSerializer, SaleSerializer, TeacherCreditReportSerializer,
+    PreOrderListSerializer, ReportExportSerializer, SaleCreateSerializer, SaleSerializer,
+    TeacherCreditReportSerializer,
 )
 from .services import (
     PreOrderCreator,
@@ -31,6 +34,9 @@ from .services import (
     deliver_preorder,
     monthly_credit_total,
     process_sale,
+    purge_report_exports,
+    start_teacher_credit_export,
+    teacher_credit_export_filename,
     teacher_credit_report,
 )
 
@@ -300,6 +306,52 @@ class TeacherCreditReportView(APIView):
     def get(self, request):
         report = teacher_credit_report(resolve_institution_scope(request))
         return Response(TeacherCreditReportSerializer(report).data)
+
+
+class TeacherCreditExportCreateView(APIView):
+    """
+    POST /api/pos/reports/teacher-credit/exports/
+    Queues the Excel version of the teachers' credit report (built in the
+    background by Celery) and answers 202 with the export to poll. Same scope
+    rules as the report: own institution, ?institution=<id> or ?institution=all.
+    """
+    permission_classes = [IsAuthenticated, IsAdministrator]
+
+    def post(self, request):
+        export = start_teacher_credit_export(request.user, resolve_institution_scope(request))
+        return Response(ReportExportSerializer(export).data, status=status.HTTP_202_ACCEPTED)
+
+
+class BaseReportExportView(APIView):
+    """Looks up an export of the caller; subclasses say what to answer with it."""
+    permission_classes = [IsAuthenticated, IsAdministrator, IsReportExportOwner]
+
+    def get_export(self, export_id):
+        purge_report_exports()
+        export = get_object_or_404(ReportExport.objects.select_related('institution'), pk=export_id)
+        self.check_object_permissions(self.request, export)
+        return export
+
+
+class TeacherCreditExportStatusView(BaseReportExportView):
+    """GET /api/pos/reports/teacher-credit/exports/<id>/"""
+
+    def get(self, request, export_id):
+        return Response(ReportExportSerializer(self.get_export(export_id)).data)
+
+
+class TeacherCreditExportDownloadView(BaseReportExportView):
+    """GET /api/pos/reports/teacher-credit/exports/<id>/download/ - the finished .xlsx."""
+    xlsx_content_type = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+
+    def get(self, request, export_id):
+        export = self.get_export(export_id)
+        if export.status != ReportExport.Status.DONE or not export.file:
+            raise ValidationError(_('El reporte aún no está listo.'))
+        return FileResponse(
+            export.file.open('rb'), as_attachment=True, content_type=self.xlsx_content_type,
+            filename=teacher_credit_export_filename(export),
+        )
 
 
 class BaseAnalyticsView(APIView):

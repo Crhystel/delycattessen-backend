@@ -237,6 +237,13 @@ QR_NONCE_TTL_SECONDS = config('QR_NONCE_TTL_SECONDS', default=360, cast=int)
 ANALYTICS_MAX_RANGE_DAYS = config('ANALYTICS_MAX_RANGE_DAYS', default=366, cast=int)
 ANALYTICS_TOP_PRODUCTS_LIMIT = config('ANALYTICS_TOP_PRODUCTS_LIMIT', default=10, cast=int)
 
+# Excel report exports (Celery): days a generated file is kept; seconds an export may
+# wait in the queue before being failed (no worker is picking it up); seconds after
+# which an unfinished export is considered stuck and marked failed.
+REPORT_EXPORT_QUEUE_TIMEOUT_SECONDS = config('REPORT_EXPORT_QUEUE_TIMEOUT_SECONDS', default=120, cast=int)
+REPORT_EXPORT_TTL_DAYS = config('REPORT_EXPORT_TTL_DAYS', default=2, cast=int)
+REPORT_EXPORT_TIMEOUT_SECONDS = config('REPORT_EXPORT_TIMEOUT_SECONDS', default=600, cast=int)
+
 # Shared cache (password-reset codes, QR nonces). Without REDIS_URL Django keeps
 # its default per-process memory cache.
 REDIS_URL = config('REDIS_URL', default='')

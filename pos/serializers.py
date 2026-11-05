@@ -4,7 +4,7 @@ from rest_framework import serializers
 
 from core.serializer_mixins import LineSummaryMixin
 from core.timezone import local_today
-from .models import PreOrder, PreOrderItem, Sale
+from .models import PreOrder, PreOrderItem, ReportExport, Sale
 from .services import GRANULARITIES, month_start_local
 
 
@@ -120,6 +120,15 @@ class TeacherCreditReportSerializer(serializers.Serializer):
     generated_at = serializers.DateTimeField()
     teachers = TeacherCreditRowSerializer(many=True)
     totals = TeacherCreditTotalsSerializer()
+
+
+class ReportExportSerializer(serializers.ModelSerializer):
+    """State of an Excel export the web polls until it is DONE (or FAILED)."""
+
+    class Meta:
+        model = ReportExport
+        fields = ('id', 'status', 'error', 'created_at', 'finished_at')
+        read_only_fields = fields
 
 
 class AnalyticsQuerySerializer(serializers.Serializer):

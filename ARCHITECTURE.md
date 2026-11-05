@@ -58,7 +58,7 @@ Una flecha `A ◄── B` significa "B puede importar de A". **No hay imports c
 | `/api/users/` | Registro de padre y estudiante, login, `me` (y `me/profile/` para que padre y docente editen sus datos), hijos (`children/<id>/` para que el padre edite nombres y usuario), alergias, control parental, PIN de pago, QR (`qr/token/`), biometría (`biometrics/register/`), reset de contraseña, gestión de personal (`staff/`) |
 | `/api/catalog/` | Menú, productos, ingredientes, alérgenos, platillos, menús mensuales (publicar/despublicar), menú del estudiante y del POS, descuentos (`promotions/`, vigentes en `promotions/active/`) y combos (`combos/`, vigentes en `combos/active/`) |
 | `/api/wallet/` | `recharge/`, `recharge/gateway/`, transacciones, callbacks de Payphone, webhook de Kushki |
-| `/api/pos/` | Preórdenes, ventas, historial, crédito docente, `identify/face/`, `identify/qr/`, analítica de ventas para el administrador (`analytics/summary/`, `analytics/timeseries/`, `analytics/top-products/`, `analytics/top-combos/`) y reporte mensual de crédito docente (`reports/teacher-credit/`) |
+| `/api/pos/` | Preórdenes, ventas, historial, crédito docente, `identify/face/`, `identify/qr/`, analítica de ventas para el administrador (`analytics/summary/`, `analytics/timeseries/`, `analytics/top-products/`, `analytics/top-combos/`) y reporte mensual de crédito docente (`reports/teacher-credit/`, con su exportación a Excel por cola en `reports/teacher-credit/exports/`) |
 | `/api/token/` | Login JWT y refresh |
 
 ## 5. Flujos clave
@@ -101,7 +101,7 @@ Reglas de las métricas:
 - La comparativa usa el periodo inmediatamente anterior de igual duración; el cambio es `null` si ese periodo vale 0.
 - Top de productos: `SaleItem` y `PreOrderItem` unidos por nombre, con ingreso `cantidad × price_at_purchase` (ya incluye la promoción); dos rankings (`by_revenue`, `by_units`) de `ANALYTICS_TOP_PRODUCTS_LIMIT` filas.
 - Top de combos: aparte de los productos, desde `SaleCombo` (cada combo es una línea a su precio, agrupado por el nombre guardado en la venta), con los mismos dos rankings y los totales del periodo (`totals.units`, `totals.revenue`).
-- Reporte de crédito docente (HU-08.2): `teacher_credit_report()` toma las ventas `CREDIT` desde el día 1 del mes (`month_start_local`) hasta el momento de generarlo, una fila por docente y sede con cada venta (productos y combos) y los totales. Incluye docentes dados de baja: el consumo existió. La web lo exporta a CSV para Recursos Humanos.
+- Reporte de crédito docente (HU-08.2): `teacher_credit_report()` toma las ventas `CREDIT` desde el día 1 del mes (`month_start_local`) hasta el momento de generarlo, una fila por docente y sede con cada venta (productos y combos) y los totales. Incluye docentes dados de baja: el consumo existió. La web lo exporta a Excel para Recursos Humanos: `POST reports/teacher-credit/exports/` crea un `ReportExport` (`PENDING`) y encola `build_teacher_credit_export_task` (202); la web consulta `exports/<id>/` hasta `DONE` y baja el `.xlsx` de `exports/<id>/download/` (solo el administrador que lo pidió, `IsReportExportOwner`). `TeacherCreditExcelBuilder` escribe en streaming (`xlsxwriter` con `constant_memory` + `iterator()`), con las hojas Resumen y Detalle; un pedido sin terminar del mismo usuario y sede se reutiliza, los atascados pasan a `FAILED` tras `REPORT_EXPORT_TIMEOUT_SECONDS` y los archivos se borran tras `REPORT_EXPORT_TTL_DAYS`.
 
 ## 6. Patrones y decisiones
 
@@ -123,6 +123,7 @@ Variables en `.env.example`, agrupadas en seguridad, entorno, base de datos, ser
 - `wallet.tasks.process_recharge_task`, `send_recharge_confirmation_email`
 - `users.tasks.send_password_reset_email`
 - `catalog.tasks` (aviso de menú mensual publicado)
+- `pos.tasks.build_teacher_credit_export_task` (Excel del reporte de crédito docente)
 
 Worker local: `run_celery.bat`. Redis y RabbitMQ locales: `docker compose up -d`.
 

@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import (PreOrderCreateView, POSFaceIdentificationView, POSQrIdentificationView, PreOrderListView, PreOrderDeliverView, SaleCreateView, CreditHistoryView, ParentSaleListView, SalesSummaryView, SalesTimeseriesView, TopProductsView, TopCombosView, TeacherCreditReportView)
+from .views import (PreOrderCreateView, POSFaceIdentificationView, POSQrIdentificationView, PreOrderListView, PreOrderDeliverView, SaleCreateView, CreditHistoryView, ParentSaleListView, SalesSummaryView, SalesTimeseriesView, TopProductsView, TopCombosView, TeacherCreditReportView, TeacherCreditExportCreateView, TeacherCreditExportStatusView, TeacherCreditExportDownloadView)
 
 urlpatterns = [
     path('preorder/', PreOrderCreateView.as_view(), name='preorder_create'),
@@ -13,6 +13,9 @@ urlpatterns = [
     path('analytics/top-products/', TopProductsView.as_view(), name='analytics_top_products'),
     path('analytics/top-combos/', TopCombosView.as_view(), name='analytics_top_combos'),
     path('reports/teacher-credit/', TeacherCreditReportView.as_view(), name='teacher_credit_report'),
+    path('reports/teacher-credit/exports/', TeacherCreditExportCreateView.as_view(), name='teacher_credit_export_create'),
+    path('reports/teacher-credit/exports/<int:export_id>/', TeacherCreditExportStatusView.as_view(), name='teacher_credit_export_status'),
+    path('reports/teacher-credit/exports/<int:export_id>/download/', TeacherCreditExportDownloadView.as_view(), name='teacher_credit_export_download'),
     path('identify/face/', POSFaceIdentificationView.as_view(), name='pos_identify_face'),
     path('identify/qr/', POSQrIdentificationView.as_view(), name='pos_identify_qr'),
 ]
