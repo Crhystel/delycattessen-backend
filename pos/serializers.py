@@ -101,6 +101,8 @@ class TeacherCreditRowSerializer(serializers.Serializer):
     institution_name = serializers.CharField(source='institution.name')
     consumptions = serializers.SerializerMethodField()
     total = serializers.DecimalField(max_digits=10, decimal_places=2)
+    statement_status = serializers.CharField(source='statement.status', default=None, allow_null=True)
+    statement_sent_at = serializers.DateTimeField(source='statement.sent_at', default=None, allow_null=True)
     sales = SaleSerializer(many=True)
 
     def get_consumptions(self, row) -> int:
@@ -113,8 +115,20 @@ class TeacherCreditTotalsSerializer(serializers.Serializer):
     amount = serializers.DecimalField(max_digits=10, decimal_places=2)
 
 
+class TeacherCreditQuerySerializer(serializers.Serializer):
+    """Which month of the credit report (empty = current) and, to export it, the file type.
+    `file_type` and not `format`: DRF reserves `?format=` for content negotiation."""
+    month = serializers.RegexField(r'^\d{4}-(0[1-9]|1[0-2])$', required=False, allow_blank=True)
+    file_type = serializers.ChoiceField(choices=ReportExport.FileType.choices, default=ReportExport.FileType.XLSX)
+
+
+class TeacherCreditStatementsSerializer(serializers.Serializer):
+    """Body of the statements dispatch: `resend` also mails the ones already sent."""
+    resend = serializers.BooleanField(default=False)
+
+
 class TeacherCreditReportSerializer(serializers.Serializer):
-    """Credit consumptions of the current month until the moment it is generated."""
+    """Credit consumptions of a month: the current one until the moment it is generated, or a past one in full."""
     date_from = serializers.DateField()
     date_to = serializers.DateField()
     generated_at = serializers.DateTimeField()
@@ -123,7 +137,7 @@ class TeacherCreditReportSerializer(serializers.Serializer):
 
 
 class ReportExportSerializer(serializers.ModelSerializer):
-    """State of an Excel export the web polls until it is DONE (or FAILED)."""
+    """State of a report export the web polls until it is DONE (or FAILED)."""
 
     class Meta:
         model = ReportExport

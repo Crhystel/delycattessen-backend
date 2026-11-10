@@ -24,9 +24,10 @@ from .permissions import IsReportExportOwner
 from .serializers import (
     AnalyticsQuerySerializer, AnalyticsTimeseriesQuerySerializer, ParentSaleSerializer, PreOrderCreateSerializer,
     PreOrderListSerializer, ReportExportSerializer, SaleCreateSerializer, SaleSerializer,
-    TeacherCreditReportSerializer,
+    TeacherCreditQuerySerializer, TeacherCreditReportSerializer, TeacherCreditStatementsSerializer,
 )
 from .services import (
+    EXPORT_FORMATS,
     PreOrderCreator,
     SalesAnalytics,
     build_identified_user_payload,
@@ -35,6 +36,7 @@ from .services import (
     monthly_credit_total,
     process_sale,
     purge_report_exports,
+    send_credit_statements,
     start_teacher_credit_export,
     teacher_credit_export_filename,
     teacher_credit_report,
@@ -294,32 +296,64 @@ class ParentSaleListView(generics.ListAPIView):
         return queryset.order_by('-created_at')[:self.max_results]
 
 
+def teacher_credit_query(request):
+    """Validated ?month=YYYY-MM (empty = current month) and ?file_type=xlsx|pdf of the credit report."""
+    query = TeacherCreditQuerySerializer(data=request.query_params)
+    query.is_valid(raise_exception=True)
+    return query.validated_data
+
+
 class TeacherCreditReportView(APIView):
     """
-    GET /api/pos/reports/teacher-credit/
-    Teachers' credit consumptions from day 1 of the current month until now
-    (HU-08.2), for the administrator to send to Human Resources. Scope: the
-    admin's institution, ?institution=<id> or ?institution=all.
+    GET /api/pos/reports/teacher-credit/?month=YYYY-MM
+    Teachers' credit consumptions (HU-08.2), for the administrator to send to
+    Human Resources: the current month from day 1 until now (default) or a
+    complete past month. Scope: the admin's institution, ?institution=<id> or
+    ?institution=all.
     """
     permission_classes = [IsAuthenticated, IsAdministrator]
 
     def get(self, request):
-        report = teacher_credit_report(resolve_institution_scope(request))
+        report = teacher_credit_report(resolve_institution_scope(request), month=teacher_credit_query(request).get('month'))
         return Response(TeacherCreditReportSerializer(report).data)
 
 
 class TeacherCreditExportCreateView(APIView):
     """
-    POST /api/pos/reports/teacher-credit/exports/
-    Queues the Excel version of the teachers' credit report (built in the
-    background by Celery) and answers 202 with the export to poll. Same scope
-    rules as the report: own institution, ?institution=<id> or ?institution=all.
+    POST /api/pos/reports/teacher-credit/exports/?month=YYYY-MM&file_type=xlsx|pdf
+    Queues the Excel (default) or PDF version of the teachers' credit report
+    (built in the background by Celery) and answers 202 with the export to
+    poll. Same month and scope rules as the report: own institution,
+    ?institution=<id> or ?institution=all.
     """
     permission_classes = [IsAuthenticated, IsAdministrator]
 
     def post(self, request):
-        export = start_teacher_credit_export(request.user, resolve_institution_scope(request))
+        query = teacher_credit_query(request)
+        export = start_teacher_credit_export(
+            request.user, resolve_institution_scope(request),
+            month=query.get('month', ''), file_type=query['file_type'],
+        )
         return Response(ReportExportSerializer(export).data, status=status.HTTP_202_ACCEPTED)
+
+
+class TeacherCreditStatementsView(APIView):
+    """
+    POST /api/pos/reports/teacher-credit/statements/?month=YYYY-MM  {"resend": false}
+    Emails each teacher the credit statement of a CLOSED month (the month in progress is rejected: its
+    amount still changes). The emails are queued (Celery, one per teacher); answers 202 with the counts
+    {queued, already_sent, without_email}. Same scope rules as the report.
+    """
+    permission_classes = [IsAuthenticated, IsAdministrator]
+
+    def post(self, request):
+        month = teacher_credit_query(request).get('month')
+        body = TeacherCreditStatementsSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        result = send_credit_statements(
+            request.user, resolve_institution_scope(request), month, resend=body.validated_data['resend'],
+        )
+        return Response(result, status=status.HTTP_202_ACCEPTED)
 
 
 class BaseReportExportView(APIView):
@@ -341,15 +375,14 @@ class TeacherCreditExportStatusView(BaseReportExportView):
 
 
 class TeacherCreditExportDownloadView(BaseReportExportView):
-    """GET /api/pos/reports/teacher-credit/exports/<id>/download/ - the finished .xlsx."""
-    xlsx_content_type = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    """GET /api/pos/reports/teacher-credit/exports/<id>/download/ - the finished .xlsx or .pdf."""
 
     def get(self, request, export_id):
         export = self.get_export(export_id)
         if export.status != ReportExport.Status.DONE or not export.file:
             raise ValidationError(_('El reporte aún no está listo.'))
         return FileResponse(
-            export.file.open('rb'), as_attachment=True, content_type=self.xlsx_content_type,
+            export.file.open('rb'), as_attachment=True, content_type=EXPORT_FORMATS[export.file_type].content_type,
             filename=teacher_credit_export_filename(export),
         )
 

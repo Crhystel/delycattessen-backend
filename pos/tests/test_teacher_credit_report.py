@@ -1,13 +1,14 @@
-from datetime import date
+from datetime import date, timezone
 from decimal import Decimal
 from unittest import mock
 
 from django.test import TestCase
+from rest_framework.exceptions import ValidationError
 from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from pos.models import Sale, SaleCombo, SaleItem
-from pos.services import teacher_credit_report
+from pos.services import credit_period, teacher_credit_report
 from pos.tests.test_analytics import AnalyticsFixtureMixin, local
 from users.models import CustomUser
 from users.services import soft_delete_account
@@ -76,6 +77,36 @@ class TeacherCreditReportTests(TeacherCreditFixtureMixin, TestCase):
         self.assertEqual(report['teachers'], [])
         self.assertEqual(report['totals'], {'teachers': 0, 'consumptions': 0, 'amount': Decimal('0.00')})
 
+    def test_a_past_month_is_complete_and_does_not_mix_other_months(self):
+        report = teacher_credit_report(self.inst_a, month='2026-02', now=NOW)
+        self.assertEqual((report['date_from'], report['date_to']), (date(2026, 2, 1), date(2026, 2, 28)))
+        [row] = report['teachers']
+        self.assertEqual((len(row['sales']), row['total']), (1, Decimal('2.50')))  # the Feb 28, 23:30 sale
+        march = teacher_credit_report(self.inst_a, month='2026-03', now=NOW)
+        self.assertEqual(march['totals']['amount'], Decimal('8.00'))  # explicit current month = day 1 until now
+
+
+class CreditPeriodTests(TestCase):
+    def test_current_month_runs_from_day_one_until_now(self):
+        self.assertEqual(credit_period(None, NOW), (local(2026, 3, 1, 0), NOW))
+        self.assertEqual(credit_period('', NOW), (local(2026, 3, 1, 0), NOW))
+
+    def test_past_month_ends_on_its_last_instant(self):
+        for month, last_day in (('2026-02', 28), ('2026-01', 31), ('2025-12', 31), ('2024-02', 29)):
+            start, end = credit_period(month, NOW)
+            self.assertEqual(start.date(), date(int(month[:4]), int(month[5:]), 1))
+            self.assertEqual((end.date().day, end.hour, end.minute, end.second), (last_day, 23, 59, 59))
+
+    def test_the_month_is_decided_in_local_time_not_utc(self):
+        # 22:00 on March 31 in Ecuador is already April 1 in UTC: it is still March.
+        late = local(2026, 3, 31, 22, 0)
+        self.assertEqual(credit_period(None, late.astimezone(timezone.utc)), (local(2026, 3, 1, 0), late))
+
+    def test_a_future_or_malformed_month_is_rejected(self):
+        for month in ('2026-04', '2027-01', '2026-13', 'marzo', '2026-03-05'):
+            with self.assertRaises(ValidationError, msg=month):
+                credit_period(month, NOW)
+
 
 @mock.patch('pos.services.local_now', return_value=NOW)
 class TeacherCreditReportApiTests(TeacherCreditFixtureMixin, APITestCase):
@@ -107,6 +138,14 @@ class TeacherCreditReportApiTests(TeacherCreditFixtureMixin, APITestCase):
         self.assertEqual(consolidated['totals']['teachers'], 2)
         other = self.client.get(f'{REPORT}?institution={self.inst_b.id}').data
         self.assertEqual([row['full_name'] for row in other['teachers']], ['ANA RUIZ'])
+
+    def test_admin_picks_a_past_month_and_a_bad_month_is_a_400(self, _now):
+        self._auth(self.admin_a)
+        february = self.client.get(f'{REPORT}?month=2026-02')
+        self.assertEqual((february.data['date_from'], february.data['date_to']), ('2026-02-01', '2026-02-28'))
+        self.assertEqual(february.data['totals']['amount'], '2.50')
+        for month in ('2026-04', '2026-13', '2026-3', 'abc'):
+            self.assertEqual(self.client.get(f'{REPORT}?month={month}').status_code, 400, month)
 
     def test_only_the_administrator_can_read_it(self, _now):
         self.assertEqual(self.client.get(REPORT).status_code, 401)
