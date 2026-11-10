@@ -28,8 +28,11 @@ def gateway_settings(settings):
 def mock_celery_delay():
     """Prevents any test from reaching the RabbitMQ broker."""
     with mock.patch('wallet.tasks.send_recharge_confirmation_email.delay') as email_delay, \
-         mock.patch('wallet.tasks.process_recharge_task.delay') as recharge_delay:
-        yield SimpleNamespace(email=email_delay, recharge=recharge_delay)
+         mock.patch('wallet.tasks.process_recharge_task.delay') as recharge_delay, \
+         mock.patch('users.tasks.send_staff_credentials_email.delay') as staff_credentials_delay:
+        yield SimpleNamespace(
+            email=email_delay, recharge=recharge_delay, staff_credentials=staff_credentials_delay,
+        )
 
 
 @pytest.fixture(autouse=True)
