@@ -1,0 +1,76 @@
+{% extends "emails/base.html" %}
+{% block content %}
+<p
+  style="
+    font-family: &quot;Sora&quot;, Arial, sans-serif;
+    font-size: 17px;
+    font-weight: 600;
+    color: #0c1b2a;
+    margin: 0 0 16px 0;
+  "
+>
+  Hola, {{ first_name }}
+</p>
+<p
+  style="
+    font-size: 15px;
+    color: #3d4e5c;
+    line-height: 1.5;
+    margin: 0 0 16px 0;
+  "
+>
+  Este es el estado de cuenta de tus consumos a crédito de
+  <strong>{{ month_label }}</strong> en {{ institution }}.
+</p>
+
+{% include "emails/_credential_box.html" with label="Total a descontar" value=total %}
+
+<p
+  style="
+    font-size: 13px;
+    font-weight: 700;
+    color: #005c99;
+    margin: 20px 0 8px 0;
+  "
+>
+  Detalle de consumos
+</p>
+<table
+  role="presentation"
+  width="100%"
+  cellpadding="0"
+  cellspacing="0"
+  style="border-collapse: collapse; font-size: 12px; color: #0c1b2a"
+>
+  <tr style="background-color: #e5f3ff; color: #005c99">
+    <th align="left" style="padding: 8px 6px; font-weight: 700">Fecha</th>
+    <th align="left" style="padding: 8px 6px; font-weight: 700">Hora</th>
+    <th align="left" style="padding: 8px 6px; font-weight: 700">Detalle</th>
+    <th align="right" style="padding: 8px 6px; font-weight: 700">Monto</th>
+  </tr>
+  {% for consumption in consumptions %}
+  <tr>
+    <td style="padding: 8px 6px; border-bottom: 1px solid #e5eaf0; white-space: nowrap">{{ consumption.date }}</td>
+    <td style="padding: 8px 6px; border-bottom: 1px solid #e5eaf0; white-space: nowrap">{{ consumption.time }}</td>
+    <td style="padding: 8px 6px; border-bottom: 1px solid #e5eaf0">{{ consumption.description }}</td>
+    <td align="right" style="padding: 8px 6px; border-bottom: 1px solid #e5eaf0; white-space: nowrap">{{ consumption.amount }}</td>
+  </tr>
+  {% endfor %}
+  <tr style="background-color: #fef8ec">
+    <td colspan="3" style="padding: 8px 6px; font-weight: 700; color: #a87028">Total a descontar</td>
+    <td align="right" style="padding: 8px 6px; font-weight: 700; color: #a87028; white-space: nowrap">{{ total }}</td>
+  </tr>
+</table>
+
+<p
+  style="
+    font-size: 13px;
+    color: #6b7b8a;
+    line-height: 1.5;
+    margin: 20px 0 0 0;
+  "
+>
+  Este valor se descontará de tu rol de pagos. Si tienes dudas, comunícate con
+  el administrador.
+</p>
+{% endblock %}

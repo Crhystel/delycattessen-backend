@@ -115,13 +115,17 @@ class SaleCombo(models.Model):
 
 
 class ReportExport(models.Model):
-    """An Excel report generated in the background (Celery) for the administrator."""
+    """A report file (Excel or PDF) generated in the background (Celery) for the administrator."""
 
     class Status(models.TextChoices):
         PENDING = 'PENDING', _('En cola')
         PROCESSING = 'PROCESSING', _('Generando')
         DONE = 'DONE', _('Listo')
         FAILED = 'FAILED', _('Fallido')
+
+    class FileType(models.TextChoices):
+        XLSX = 'xlsx', 'Excel'
+        PDF = 'pdf', 'PDF'
 
     ACTIVE_STATUSES = (Status.PENDING, Status.PROCESSING)
 
@@ -134,6 +138,11 @@ class ReportExport(models.Model):
         related_name='report_exports', null=True, blank=True,
         help_text=_('Empty for the consolidated view (every institution).'),
     )
+    month = models.CharField(
+        _('month'), max_length=7, blank=True,
+        help_text=_('YYYY-MM. Empty for the current month (day 1 until the moment it is generated).'),
+    )
+    file_type = models.CharField(_('file type'), max_length=4, choices=FileType.choices, default=FileType.XLSX)
     status = models.CharField(_('status'), max_length=12, choices=Status.choices, default=Status.PENDING)
     file = models.FileField(_('file'), upload_to='exports/', blank=True)
     error = models.CharField(_('error'), max_length=255, blank=True)
@@ -147,3 +156,41 @@ class ReportExport(models.Model):
 
     def __str__(self):
         return f'ReportExport {self.id} ({self.status})'
+
+
+class CreditStatement(models.Model):
+    """The credit statement of one closed month emailed to a teacher (one per teacher,
+    institution and month). It records that it was sent, so a double click never mails twice."""
+
+    class Status(models.TextChoices):
+        QUEUED = 'QUEUED', _('En cola')
+        SENT = 'SENT', _('Enviado')
+        FAILED = 'FAILED', _('Fallido')
+
+    teacher = models.ForeignKey(
+        settings.AUTH_USER_MODEL, verbose_name=_('teacher'),
+        on_delete=models.PROTECT, related_name='credit_statements',
+    )
+    institution = models.ForeignKey(
+        'users.Institution', verbose_name=_('institution'),
+        on_delete=models.PROTECT, related_name='credit_statements',
+    )
+    month = models.CharField(_('month'), max_length=7, help_text=_('YYYY-MM'))
+    total = models.DecimalField(_('total'), max_digits=10, decimal_places=2, default=0)
+    status = models.CharField(_('status'), max_length=8, choices=Status.choices, default=Status.QUEUED)
+    sent_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, verbose_name=_('sent by'),
+        on_delete=models.PROTECT, related_name='+',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = _('credit statement')
+        verbose_name_plural = _('credit statements')
+        constraints = [
+            models.UniqueConstraint(fields=['teacher', 'institution', 'month'], name='unique_credit_statement'),
+        ]
+
+    def __str__(self):
+        return f'CreditStatement {self.month} teacher={self.teacher_id} ({self.status})'
