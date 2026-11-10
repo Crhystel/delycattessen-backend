@@ -112,6 +112,8 @@ Reglas de las métricas:
 - **Aislamiento multi-institución**: un usuario solo ve y escribe datos de su institución; el administrador puede ampliar con `?institution=<id>` o `?institution=all` (solo lectura consolidada).
 - **Soft delete** de cuentas (`soft_delete_account`): se conserva el historial de ventas y se borran datos personales y biometría.
 - **Datos sensibles** (foto, biometría, alergias, contraseña): solo los maneja el dueño de la cuenta; el administrador nunca los toca (`CanRegisterBiometric`). El administrador gestiona al personal operativo por completo y, de los docentes, solo activa/desactiva (y corrige o elimina los pendientes de activación) según `CanManageStaffAccount`.
+- **Contraseña temporal del personal**: al crear un docente o personal operativo (`POST /api/users/staff/`), `create_staff_account` genera la contraseña (8 caracteres con letras y números, sin símbolos ni caracteres que se confunden como `I l i L o O 0 1`, para leerla y copiarla fácil) y `notify_staff_credentials` la envía al correo del nuevo usuario por Celery; la API **no la devuelve** (solo `email_sent`, para avisar al admin si el correo no se pudo encolar). El usuario debe cambiarla en su primer inicio de sesión (`must_change_password`).
+- **Correos HTML**: viven en `users/templates/emails/`. Los correos nuevos extienden `base.html` (encabezado, barra de acento y pie de marca) y solo definen `{% block content %}`; para destacar un dato que el usuario debe copiar (usuario, contraseña) usan `{% include "emails/_credential_box.html" with label=... value=... %}`; los tres anteriores (`password_reset`, `recharge_confirmation`, `monthly_menu_published`) aún llevan el marco copiado.
 - **Deuda conocida**: los campos de nombre usan `first_name`, `second_name`, `last_name`, `second_last_name` (heredados de `AbstractUser`); el estándar del proyecto es `first_name`, `middle_name`, `first_last_name`, `second_last_name`. Renombrarlos requiere migración y revisar API y clientes.
 
 ## 7. Configuración
@@ -121,7 +123,7 @@ Variables en `.env.example`, agrupadas en seguridad, entorno, base de datos, ser
 ## 8. Tareas asíncronas (Celery)
 
 - `wallet.tasks.process_recharge_task`, `send_recharge_confirmation_email`
-- `users.tasks.send_password_reset_email`
+- `users.tasks.send_password_reset_email`, `send_staff_credentials_email` (contraseña temporal de un docente o personal operativo recién creado)
 - `catalog.tasks` (aviso de menú mensual publicado)
 - `pos.tasks.build_teacher_credit_export_task` (Excel del reporte de crédito docente)
 

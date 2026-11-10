@@ -9,6 +9,7 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
+from kombu.exceptions import OperationalError
 from rest_framework.exceptions import ValidationError
 from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -16,10 +17,16 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from core.biometrics import BiometricValidationMixin
 
 from .models import CustomUser, StudentProfile, UserBiometric
+from .tasks import send_staff_credentials_email
 
 logger = logging.getLogger(__name__)
 
 QR_TOKEN_TYPE = 'pos_dynamic_qr'
+
+TEMPORARY_PASSWORD_LENGTH = 8
+TEMP_PASSWORD_UPPERCASE = ''.join(c for c in string.ascii_uppercase if c not in 'ILO')
+TEMP_PASSWORD_LOWERCASE = ''.join(c for c in string.ascii_lowercase if c not in 'ilo')
+TEMP_PASSWORD_DIGITS = '23456789'
 
 
 @transaction.atomic
@@ -63,8 +70,11 @@ def rotate_user_tokens(user):
     return {'access': str(refresh.access_token), 'refresh': str(refresh)}
 
 
-def generate_temporary_password(length=12):
-    pools = (string.ascii_uppercase, string.ascii_lowercase, string.digits, '!@#$%^&*')
+def generate_temporary_password(length=TEMPORARY_PASSWORD_LENGTH):
+    """Short, letters-and-digits password that is easy to read and copy: no
+    look-alike characters (I l i L o O 0 1) and no symbols, so a double click
+    selects all of it. Has at least one uppercase, one lowercase and one digit."""
+    pools = (TEMP_PASSWORD_UPPERCASE, TEMP_PASSWORD_LOWERCASE, TEMP_PASSWORD_DIGITS)
     chars = [secrets.choice(pool) for pool in pools]
     alphabet = ''.join(pools)
     chars += [secrets.choice(alphabet) for _idx in range(length - len(chars))]
@@ -97,6 +107,21 @@ def create_staff_account(validated_data, admin, target_institution=None):
         must_change_password=True,
     )
     return user, temporary_password
+
+
+def notify_staff_credentials(user, temporary_password):
+    """Enqueues the email with the temporary password of a new staff account.
+    The account is already committed, so an unreachable broker must not turn the
+    creation into a 500: returns False so the admin can be warned. The password
+    is never logged."""
+    try:
+        send_staff_credentials_email.delay(
+            user.email, user.first_name, str(user.get_role_display()), temporary_password,
+        )
+    except (OperationalError, OSError):
+        logger.exception('Could not enqueue the credentials email for staff account %s', user.pk)
+        return False
+    return True
 
 
 def extract_embedding(photo):

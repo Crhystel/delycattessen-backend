@@ -57,6 +57,7 @@ from .services import (
     build_qr_token,
     create_staff_account,
     extract_unique_embedding,
+    notify_staff_credentials,
     register_biometric,
     revoke_user_tokens,
     rotate_user_tokens,
@@ -96,13 +97,16 @@ class StaffViewSet(InstitutionScopeMixin, ModelViewSet):
             admin=request.user,
             target_institution=serializer.context.get('institution'),
         )
+        email_sent = notify_staff_credentials(user, temporary_password)
         return Response(
             {
                 "message": str(_('%(role)s creado exitosamente.')) % {'role': user.get_role_display()},
                 "email": user.email,
                 "institution": user.institution.name,
-                "temporary_password": temporary_password,
-                "note": str(_('El usuario deberá cambiar esta contraseña en su primer inicio de sesión.'))
+                "email_sent": email_sent,
+                "note": str(_('Enviamos la contraseña temporal al correo del usuario, quien deberá cambiarla en su primer inicio de sesión.'))
+                if email_sent
+                else str(_('No se pudo enviar el correo con la contraseña temporal.')),
             },
             status=status.HTTP_201_CREATED
         )

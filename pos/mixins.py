@@ -1,10 +1,11 @@
+from datetime import datetime, time, timedelta
 from decimal import Decimal
 
 from django.db.models import Sum
 from django.utils.translation import gettext_lazy as _
 from rest_framework.exceptions import ValidationError
 
-from core.timezone import local_today
+from core.timezone import LOCAL_TIMEZONE, local_today
 from wallet.models import Transaction
 
 
@@ -58,11 +59,15 @@ class ParentalControlValidatorMixin:
             ).aggregate(total=Sum('total_amount'))['total'] or Decimal('0.00')
 
             if target_date == today_ec:
+                # Local day bounds: `created_at__date` would use UTC and miss the
+                # purchases made after 19:00 local time.
+                day_start = datetime.combine(today_ec, time.min, tzinfo=LOCAL_TIMEZONE)
                 direct_sum = Transaction.objects.filter(
                     wallet=student.wallet,
                     type=Transaction.Type.CONSUMPTION,
                     status=Transaction.Status.SUCCESS,
-                    created_at__date=today_ec,
+                    created_at__gte=day_start,
+                    created_at__lt=day_start + timedelta(days=1),
                     pre_order__isnull=True,
                 ).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
             else:
