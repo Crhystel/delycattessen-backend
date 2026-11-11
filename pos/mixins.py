@@ -6,31 +6,41 @@ from django.utils.translation import gettext_lazy as _
 from rest_framework.exceptions import ValidationError
 
 from core.timezone import LOCAL_TIMEZONE, local_today
+from users.models import StudentProfile
 from wallet.models import Transaction
 
 
 class AllergenValidatorMixin:
     """
-    Mixin to validate if the items in a preorder contain allergens
-    that the student is allergic to.
+    Mixin to validate if the items in a sale or preorder contain allergens
+    that the owner of the allergies (a student profile or a teacher) is
+    allergic to. There is no bypass: it applies to every payment method and
+    every role that operates the sale.
     """
-    def validate_allergens(self, student_profile, menu_items):
-        student_allergies = student_profile.allergies.all()
-        if not student_allergies.exists():
+    def validate_allergens(self, owner, menu_items):
+        owner_allergies = owner.allergies.all()
+        if not owner_allergies.exists():
             return  # No allergies registered
 
         for item in menu_items:
-            # Check intersection of item allergens and student allergies
+            # Check intersection of item allergens and the owner's allergies
             item_allergens = item.allergens.all()
-            intersection = student_allergies.intersection(item_allergens)
+            intersection = owner_allergies.intersection(item_allergens)
             if intersection.exists():
-                allergen_names = ', '.join([a.name for a in intersection])
-                raise ValidationError(
-                    _('El producto "%(product)s" contiene alérgenos que afectan al estudiante: %(allergens)s') % {
-                        'product': item.name,
-                        'allergens': allergen_names
-                    }
-                )
+                raise ValidationError(self.allergen_conflict_message(
+                    owner, item.name, ', '.join([a.name for a in intersection])
+                ))
+
+    @staticmethod
+    def allergen_conflict_message(owner, product, allergens):
+        """The text is addressed to whoever reads it: the cashier (or parent)
+        about a student, or the teacher about themselves."""
+        params = {'product': product, 'allergens': allergens}
+        if isinstance(owner, StudentProfile):
+            return _(
+                'El producto "%(product)s" contiene alérgenos que afectan al estudiante: %(allergens)s'
+            ) % params
+        return _('El producto "%(product)s" contiene alérgenos que te afectan: %(allergens)s') % params
 
 class ParentalControlValidatorMixin:
     def validate_parental_controls(self, student, amount, target_date=None):

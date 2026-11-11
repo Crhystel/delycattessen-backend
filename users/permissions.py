@@ -107,6 +107,12 @@ class IsTeacherUser(RolePermission):
     allowed_roles = (CustomUser.Role.TEACHER,)
 
 
+class IsStudentUser(RolePermission):
+    """Only CustomUser with role STUDENT can access the endpoint."""
+    message = _('Solo un estudiante puede realizar esta acción.')
+    allowed_roles = (CustomUser.Role.STUDENT,)
+
+
 class CanEditOwnProfile(RolePermission):
     """Parents and teachers keep their own profile up to date (HU of profile
     edition); the other roles are managed by an administrator."""

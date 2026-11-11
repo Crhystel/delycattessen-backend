@@ -4,7 +4,7 @@ from django.db.models import Prefetch
 from django.shortcuts import get_object_or_404
 from django.utils.translation import gettext_lazy as _
 from rest_framework import generics, status
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.permissions import IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -12,9 +12,11 @@ from rest_framework.views import APIView
 from core.timezone import local_today
 from core.mixins import OwnInstitutionMixin, ViewerInstitutionMixin
 from users.models import StudentProfile
-from users.permissions import IsAdministrator, IsOperativeUser, IsParentOfStudent, SameInstitutionAsTarget
+from users.permissions import (
+    IsAdministrator, IsOperativeUser, IsParentOfStudent, IsStudentUser, SameInstitutionAsTarget,
+)
 
-from .mixins import PromotionsInForceMixin
+from .mixins import PromotionsInForceMixin, ViewerAllergenContextMixin
 from .models import Allergen, Combo, DailyMenu, Ingredient, MenuDish, MenuItem, MonthlyMenu, Promotion
 from .serializers import (
     AllergenCreateSerializer,
@@ -34,10 +36,11 @@ from .serializers import (
 from .services import ComboService, MonthlyMenuService, PromotionService
 
 
-class MenuListView(PromotionsInForceMixin, ViewerInstitutionMixin, generics.ListAPIView):
+class MenuListView(ViewerAllergenContextMixin, PromotionsInForceMixin, ViewerInstitutionMixin, generics.ListAPIView):
     """Products of a single institution; see ViewerInstitutionMixin for how
-    it is chosen per role (parents pass ?student_id=)."""
-    queryset = MenuItem.objects.filter(is_active=True, is_visible=True)
+    it is chosen per role (parents pass ?student_id=). Each product marks the
+    viewer's allergen conflicts (ViewerAllergenContextMixin)."""
+    queryset = MenuItem.objects.filter(is_active=True, is_visible=True).prefetch_related('allergens')
     serializer_class = MenuItemSerializer
     permission_classes = [IsAuthenticated]
 
@@ -105,13 +108,13 @@ class PromotionDetailView(OwnInstitutionMixin, generics.RetrieveUpdateDestroyAPI
     permission_classes = [IsAdministrator]
 
 
-class ActivePromotionListView(ViewerInstitutionMixin, generics.ListAPIView):
+class ActivePromotionListView(ViewerAllergenContextMixin, ViewerInstitutionMixin, generics.ListAPIView):
     """
     GET /api/catalog/promotions/active/
     Promotions in force today for the viewer's institution (parents pass
     ?student_id=, as in MenuListView), used by the mobile promotion banner.
     """
-    queryset = Promotion.objects.select_related('institution').prefetch_related('products')
+    queryset = Promotion.objects.select_related('institution').prefetch_related('products__allergens')
     serializer_class = PromotionSerializer
     permission_classes = [IsAuthenticated]
 
@@ -143,7 +146,7 @@ class ComboDetailView(OwnInstitutionMixin, generics.RetrieveUpdateDestroyAPIView
     permission_classes = [IsAdministrator]
 
 
-class ActiveComboListView(ViewerInstitutionMixin, generics.ListAPIView):
+class ActiveComboListView(ViewerAllergenContextMixin, ViewerInstitutionMixin, generics.ListAPIView):
     """
     GET /api/catalog/combos/active/
     Combos in force today for the viewer's institution (parents pass
@@ -154,7 +157,7 @@ class ActiveComboListView(ViewerInstitutionMixin, generics.ListAPIView):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return ComboService.in_force(super().get_queryset())
+        return ComboService.in_force(super().get_queryset()).prefetch_related('items__menu_item__allergens')
 
 
 class IngredientListView(generics.ListAPIView):
@@ -353,12 +356,16 @@ class BaseStudentMenuView(APIView):
     def check_student(self, request, student):
         self.check_object_permissions(request, student)
 
-    def get(self, request, student_id):
-        student = get_object_or_404(
-            StudentProfile.objects.select_related('institution', 'parental_control').prefetch_related('allergies'),
-            id=student_id,
-        )
+    def student_queryset(self):
+        return StudentProfile.objects.select_related('institution', 'parental_control').prefetch_related('allergies')
+
+    def get_student(self, request, student_id):
+        student = get_object_or_404(self.student_queryset(), id=student_id)
         self.check_student(request, student)
+        return student
+
+    def get(self, request, **kwargs):
+        student = self.get_student(request, **kwargs)
         today_ec = local_today()
         days = DailyMenu.objects.filter(
             monthly_menu__institution=student.institution,
@@ -387,6 +394,24 @@ class StudentMonthlyMenuView(BaseStudentMenuView):
 
     def first_date(self, today):
         return today + timedelta(days=1)
+
+
+class OwnStudentMonthlyMenuView(BaseStudentMenuView):
+    """
+    GET /api/catalog/students/me/monthly_menu/
+    Student view (read only): the same menu a parent sees for the child, but
+    the student is the authenticated user, so no id is needed.
+    """
+    permission_classes = [IsStudentUser]
+
+    def first_date(self, today):
+        return today + timedelta(days=1)
+
+    def get_student(self, request, **kwargs):
+        student = self.student_queryset().filter(user=request.user).first()
+        if student is None:
+            raise NotFound(_('Tu cuenta no tiene un perfil de estudiante.'))
+        return student
 
 
 class POSStudentMenuView(BaseStudentMenuView):

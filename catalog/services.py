@@ -12,7 +12,7 @@ from rest_framework.exceptions import ValidationError
 
 from core.timezone import local_today
 
-from .models import Combo, ComboItem, MonthlyMenu, DailyMenu, MenuDish, MenuItem, Promotion
+from .models import Allergen, Combo, ComboItem, MonthlyMenu, DailyMenu, MenuDish, MenuItem, Promotion
 from .tasks import send_monthly_menu_published_email
 
 logger = logging.getLogger(__name__)
@@ -27,6 +27,24 @@ def _notify_menu_published(monthly_menu_id: int) -> None:
         logger.exception(
             'Could not enqueue published-menu email for monthly menu %s', monthly_menu_id
         )
+
+
+def sync_allergens_from_ingredients(obj) -> None:
+    """Stores on a MenuItem or MenuDish the union of its ingredients' allergens.
+    POS sales and preorders check this denormalized list, so it must be
+    recomputed whenever the product or one of its ingredients changes."""
+    allergen_ids = Allergen.objects.filter(
+        ingredients__in=obj.ingredients.all()
+    ).values_list('id', flat=True)
+    obj.allergens.set(set(allergen_ids))
+
+
+def resync_allergens_for_ingredient(ingredient) -> None:
+    """Recomputes the allergens of every product and dish that uses `ingredient`
+    (active or not), so a change to the ingredient never leaves them stale."""
+    with transaction.atomic():
+        for obj in [*ingredient.menu_items.all(), *ingredient.menu_dishes.all()]:
+            sync_allergens_from_ingredients(obj)
 
 
 class MonthlyMenuService:

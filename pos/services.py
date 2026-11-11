@@ -173,7 +173,10 @@ class WalletSaleProcessor(ParentalControlValidatorMixin, SaleProcessor):
     role_error = _('Solo los estudiantes pueden pagar con saldo.')
 
     def allergy_owner(self):
-        return self.customer.student_profile
+        student = getattr(self.customer, 'student_profile', None)
+        if student is None:
+            raise ValidationError({'user_id': _('El cliente no tiene un perfil de estudiante.')})
+        return student
 
     def validate_customer(self, items, total):
         super().validate_customer(items, total)

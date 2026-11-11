@@ -4,7 +4,7 @@ from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.utils.translation import gettext_lazy as _
 from rest_framework import generics, status
-from rest_framework.exceptions import ValidationError as DRFValidationError
+from rest_framework.exceptions import NotFound, ValidationError as DRFValidationError
 from rest_framework.generics import get_object_or_404
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -30,6 +30,7 @@ from .permissions import (
     IsParentOfStudent,
     IsParentUser,
     IsStudentOrTeacherUser,
+    IsStudentUser,
     IsTeacherUser,
     SameInstitutionPermission,
     get_object_institution_id,
@@ -233,7 +234,7 @@ class ChildrenListView(generics.ListAPIView):
     permission_classes = [IsAuthenticated, IsParentUser]
 
     def get_queryset(self):
-        return self.request.user.parent_profile.children.all()
+        return self.request.user.parent_profile.children.select_related('parental_control')
 
 
 class ChildProfileUpdateView(APIView):
@@ -338,6 +339,20 @@ class TeacherAllergyView(BaseAllergyView):
 
     def get_owner(self, request):
         return request.user
+
+
+class OwnStudentAllergyView(BaseAllergyView):
+    """GET /api/users/me/allergies/ - the authenticated student's own allergies.
+    Read only: only the parent can change a child's allergies."""
+
+    permission_classes = [IsAuthenticated, IsStudentUser]
+    http_method_names = ['get', 'head', 'options']
+
+    def get_owner(self, request):
+        student = getattr(request.user, 'student_profile', None)
+        if student is None:
+            raise NotFound(_('Tu cuenta no tiene un perfil de estudiante.'))
+        return student
 
 
 class SetPaymentPinView(APIView):
