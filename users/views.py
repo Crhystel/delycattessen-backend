@@ -39,6 +39,7 @@ from .permissions import (
 from .serializers import (
     AllergenSerializer,
     ChangePasswordSerializer,
+    ChildPasswordChangeSerializer,
     ChildProfileUpdateSerializer,
     ChildSerializer,
     CreateStaffSerializer,
@@ -57,6 +58,7 @@ from .serializers import (
 )
 from .services import (
     build_qr_token,
+    change_child_password,
     create_staff_account,
     extract_unique_embedding,
     notify_staff_credentials,
@@ -274,6 +276,27 @@ class ChildProfileUpdateView(APIView):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(ChildSerializer(student_profile).data)
+
+
+class ChildPasswordView(APIView):
+    """
+    POST /api/users/children/<student_id>/password/
+    The parent sets a new password for their child, confirming with their own.
+    The child's sessions are closed and the parent gets an e-mail notice (without
+    the password). Attempts are rate limited (scope `child_account`).
+    """
+    permission_classes = [IsAuthenticated, IsParentOfStudent]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'child_account'
+
+    def post(self, request, student_id):
+        student = get_object_or_404(StudentProfile.objects.select_related('user', 'parent__user'), pk=student_id)
+        serializer = ChildPasswordChangeSerializer(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        change_child_password(
+            student, serializer.validated_data['new_password'], parent=request.user, request=request,
+        )
+        return Response({'message': _('La contraseña de tu hijo/a se actualizó correctamente.')})
 
 
 class ChildPhotoUpdateView(APIView):

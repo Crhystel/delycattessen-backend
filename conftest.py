@@ -30,10 +30,10 @@ def mock_celery_delay():
     with mock.patch('wallet.tasks.send_recharge_confirmation_email.delay') as email_delay, \
          mock.patch('wallet.tasks.process_recharge_task.delay') as recharge_delay, \
          mock.patch('users.tasks.send_staff_credentials_email.delay') as staff_credentials_delay, \
-         mock.patch('users.tasks.send_password_reset_by_admin_email.delay') as admin_reset_delay:
+         mock.patch('users.tasks.send_password_reset_by_admin_email.delay') as admin_reset_delay,          mock.patch('users.tasks.send_child_password_changed_email.delay') as child_password_delay:
         yield SimpleNamespace(
             email=email_delay, recharge=recharge_delay, staff_credentials=staff_credentials_delay,
-            admin_reset=admin_reset_delay,
+            admin_reset=admin_reset_delay, child_password=child_password_delay,
         )
 
 

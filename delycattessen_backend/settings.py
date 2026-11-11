@@ -172,6 +172,8 @@ REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_RATES': {
         # Attempts per user to change the password (guessing the current one).
         'change_password': config('CHANGE_PASSWORD_THROTTLE_RATE', default='5/hour'),
+        # Attempts per parent to change a child's password (guessing the parent's own).
+        'child_account': config('CHILD_ACCOUNT_THROTTLE_RATE', default='10/hour'),
     },
 }
 SIMPLE_JWT = {
