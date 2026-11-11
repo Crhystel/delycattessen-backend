@@ -1,3 +1,14 @@
+# Desarrollo local.
+#
+#   docker compose up -d                      -> solo Redis y RabbitMQ (como siempre;
+#                                                la API y Celery se corren a mano)
+#   docker compose --profile full up -d --build -> todo el backend en contenedores:
+#                                                Postgres + API (0.0.0.0:8000) + Celery
+#
+# El perfil "full" sirve a la web (http://localhost:8000), al emulador Android
+# (http://10.0.2.2:8000) y a un celular en la misma red (http://<IP-de-tu-PC>:8000)
+# con un único proceso. Lee tu .env; DB_NAME, DB_USER y DB_PASSWORD de ese archivo
+# son las credenciales de la base de datos del contenedor.
 services:
   redis:
     image: redis:alpine
@@ -17,3 +28,72 @@ services:
       retries: 5
     # Bound to localhost only; 15672 is the management panel.
     ports: ["127.0.0.1:5672:5672", "127.0.0.1:15672:15672"]
+
+  # ---------------------------------------------------------------- perfil full
+  db:
+    profiles: ["full"]
+    image: postgres:16-alpine
+    mem_limit: 256m
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # 5433 en el host para no chocar con un Postgres local en 5432.
+    ports: ["127.0.0.1:5433:5432"]
+
+  api:
+    profiles: ["full"]
+    build: .
+    command: python manage.py runserver 0.0.0.0:8000
+    mem_limit: 768m
+    restart: unless-stopped
+    env_file: .env
+    environment: &backend-env
+      DB_HOST: db
+      DB_PORT: "5432"
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672//
+      REDIS_URL: redis://redis:6379/1
+      DEBUG: "True"
+      ALLOWED_HOSTS: "*"
+      CORS_ALLOW_ALL_ORIGINS: "True"
+      HTTPS_ONLY: "False"
+      BOOTSTRAP: "1"
+    volumes:
+      # Código montado: los cambios se recargan solos, sin reconstruir la imagen.
+      # media/ y models/ del proyecto se reutilizan (fotos y modelos faciales).
+      - .:/app
+    ports: ["8000:8000"]
+    depends_on:
+      db: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      redis: { condition: service_started }
+
+  worker:
+    profiles: ["full"]
+    build: .
+    # Pool por defecto (prefork) con 1 proceso: poco consumo. En Linux no hacen
+    # falta los flags de run_celery.bat (esos son solo para Windows sin Docker).
+    command: celery -A delycattessen_backend worker -l info --concurrency=1
+    mem_limit: 384m
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      <<: *backend-env
+      BOOTSTRAP: "0"
+    volumes:
+      - .:/app
+    depends_on:
+      db: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      redis: { condition: service_started }
+
+volumes:
+  pgdata:
