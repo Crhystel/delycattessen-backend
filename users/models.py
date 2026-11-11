@@ -118,6 +118,11 @@ class ParentalControl(models.Model):
     daily_limit_amount = models.DecimalField(_('daily limit amount'), max_digits=8, decimal_places=2, default=0.00)
     allowed_days_enabled = models.BooleanField(_('allowed days enabled'), default=False)
     allowed_days = models.JSONField(_('allowed days'), default=list, help_text=_('List of integers (0=Monday, 6=Sunday)'))
+    low_balance_alert_enabled = models.BooleanField(_('low balance alert enabled'), default=False)
+    low_balance_alert_amount = models.DecimalField(
+        _('low balance alert amount'), max_digits=8, decimal_places=2, default=2.00,
+        help_text=_('The parent is warned when the wallet balance drops below this amount'),
+    )
 
     def __str__(self) -> str:
         return f"Parental Control for {self.student.user.username}"

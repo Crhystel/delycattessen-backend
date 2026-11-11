@@ -46,10 +46,10 @@ Una flecha `A ◄── B` significa "B puede importar de A". **No hay imports c
 
 ### Modelo de datos (resumen)
 
-- **users**: `Institution` (única fuente de verdad de sede) · `CustomUser` (rol, institución, nombre en 4 partes) · `ParentProfile` · `StudentProfile` (padre, institución, foto) · `ParentalControl` · `UserBiometric` (vector cifrado: `encrypted_embedding`, `nonce`, `tag`).
+- **users**: `Institution` (única fuente de verdad de sede) · `CustomUser` (rol, institución, nombre en 4 partes) · `ParentProfile` · `StudentProfile` (padre, institución, foto) · `ParentalControl` (límite diario, días permitidos y aviso de saldo bajo: `low_balance_alert_enabled`/`low_balance_alert_amount`; el listado de hijos devuelve `low_balance_alert_amount`, `null` si el aviso está desactivado) · `UserBiometric` (vector cifrado: `encrypted_embedding`, `nonce`, `tag`).
 - **catalog**: `Allergen` · `Ingredient` (alérgenos) · `MenuItem` (producto del POS, con stock) · `MenuDish` (platillo de preorden) · `MonthlyMenu` (borrador/publicado) → `DailyMenu` · `Promotion` (descuento % sobre productos) y `Combo` → `ComboItem` (productos a precio fijo), ambos con fechas de vigencia (`ValidityPeriod`).
 - **wallet**: `Wallet` (1 a 1 con estudiante, saldo) · `Transaction` (recarga o consumo, pasarela, estado, enlace a `PreOrder` o `Sale`).
-- **pos**: `PreOrder` → `PreOrderItem` · `Sale` (efectivo, crédito o saldo) → `SaleItem` · `ReportExport` (archivo de reporte en cola) · `CreditStatement` (estado de cuenta mensual enviado a un docente).
+- **pos**: `PreOrder` → `PreOrderItem` (el listado de preórdenes y el historial de compras del padre incluyen la foto, `image`, de cada producto) · `Sale` (efectivo, crédito o saldo) → `SaleItem` · `ReportExport` (archivo de reporte en cola) · `CreditStatement` (estado de cuenta mensual enviado a un docente).
 
 ## 4. Endpoints
 

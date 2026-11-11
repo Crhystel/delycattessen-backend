@@ -1,9 +1,12 @@
 from decimal import Decimal
+from django.db import transaction
 from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
 from .models import MenuItem, Allergen, Ingredient, MenuDish, MonthlyMenu, DailyMenu, Promotion, Combo
-from .mixins import IngredientValidationMixin, AllergenSyncMixin, ValidityPeriodSerializerMixin
-from .services import ComboService, PromotionService
+from .mixins import (
+    AllergenSyncMixin, IngredientValidationMixin, ValidityPeriodSerializerMixin, ViewerAllergenFieldsMixin,
+)
+from .services import ComboService, PromotionService, resync_allergens_for_ingredient
 
 
 class AllergenSerializer(serializers.ModelSerializer):
@@ -35,7 +38,12 @@ class IngredientSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         if 'allergens' in self.initial_data:
             validated_data['allergens_reviewed'] = True
-        return super().update(instance, validated_data)
+        with transaction.atomic():
+            instance = super().update(instance, validated_data)
+            # Products and dishes keep a stored copy of their allergens (the POS
+            # and preorders check it), so it must follow this ingredient.
+            resync_allergens_for_ingredient(instance)
+        return instance
 
 
 class IngredientCreateSerializer(serializers.ModelSerializer):
@@ -55,7 +63,9 @@ class IngredientCreateSerializer(serializers.ModelSerializer):
         return super().create(validated_data)
 
 
-class MenuItemSerializer(IngredientValidationMixin, AllergenSyncMixin, serializers.ModelSerializer):
+class MenuItemSerializer(
+    IngredientValidationMixin, AllergenSyncMixin, ViewerAllergenFieldsMixin, serializers.ModelSerializer
+):
     """`ingredients` is writable as a list of Ingredient ids. `allergens` is
     NEVER set directly by the client — it's auto-computed as the union of
     the selected ingredients' allergens, so allergen safety never depends
@@ -70,7 +80,10 @@ class MenuItemSerializer(IngredientValidationMixin, AllergenSyncMixin, serialize
 
     `price` is always the original price; `discount_percentage` and
     `final_price` reflect the promotion in force today (see PromotionService),
-    so they go back to null/`price` on their own once it expires."""
+    so they go back to null/`price` on their own once it expires.
+
+    `has_viewer_allergens` / `conflicting_allergens` mark, for whoever is asking,
+    the allergens of the product that affect them (see ViewerAllergenContextMixin)."""
 
     is_active = serializers.BooleanField(default=True, required=False)
     is_visible = serializers.BooleanField(default=True, required=False)
@@ -81,7 +94,7 @@ class MenuItemSerializer(IngredientValidationMixin, AllergenSyncMixin, serialize
         fields = [
             'id', 'name', 'description', 'category', 'image', 'price',
             'is_active', 'is_visible', 'stock', 'ingredients', 'allergens',
-            'institution_name',
+            'institution_name', 'has_viewer_allergens', 'conflicting_allergens',
         ]
         read_only_fields = ['allergens']
 
@@ -223,28 +236,36 @@ class StudentMenuDishSerializer(serializers.ModelSerializer):
     price = serializers.DecimalField(max_digits=6, decimal_places=2)
     allergens = serializers.SerializerMethodField()
     has_student_allergens = serializers.SerializerMethodField()
+    conflicting_allergens = serializers.SerializerMethodField()
     image = serializers.SerializerMethodField()
 
     class Meta:
         model = MenuDish
         fields = [
             'id', 'name', 'description', 'price', 'image',
-            'allergens', 'has_student_allergens',
+            'allergens', 'has_student_allergens', 'conflicting_allergens',
         ]
 
     def get_allergens(self, obj) -> list[str]:
         return [a.name for a in obj.allergens.all()]
 
-    def get_has_student_allergens(self, obj) -> bool:
+    def _student_allergy_ids(self) -> set[int]:
         student_allergy_ids = self.context.get('student_allergy_ids')
         if student_allergy_ids is None:
             student = self.context.get('student')
             if not student:
-                return False
+                return set()
             student_allergy_ids = set(student.allergies.values_list('id', flat=True))
             self.context['student_allergy_ids'] = student_allergy_ids
+        return student_allergy_ids
+
+    def get_has_student_allergens(self, obj) -> bool:
         dish_allergy_ids = set(a.id for a in obj.allergens.all())
-        return bool(student_allergy_ids & dish_allergy_ids)
+        return bool(self._student_allergy_ids() & dish_allergy_ids)
+
+    def get_conflicting_allergens(self, obj) -> list[str]:
+        student_allergy_ids = self._student_allergy_ids()
+        return [a.name for a in obj.allergens.all() if a.id in student_allergy_ids]
 
     def get_image(self, obj) -> str | None:
         if not obj.image:
@@ -298,10 +319,15 @@ class StudentDailyMenuSerializer(serializers.ModelSerializer):
         dishes = [d for d in obj.dishes.all() if d.is_active]
         return StudentMenuDishSerializer(dishes, many=True, context=self.context).data
 
-class PromotionProductSerializer(serializers.ModelSerializer):
+class PromotionProductSerializer(ViewerAllergenFieldsMixin, serializers.ModelSerializer):
+    allergens = AllergenSerializer(many=True, read_only=True)
+
     class Meta:
         model = MenuItem
-        fields = ['id', 'name', 'price', 'image']
+        fields = [
+            'id', 'name', 'price', 'image',
+            'allergens', 'has_viewer_allergens', 'conflicting_allergens',
+        ]
 
 
 class PromotionSerializer(ValidityPeriodSerializerMixin, serializers.ModelSerializer):
@@ -358,12 +384,17 @@ class PromotionSerializer(ValidityPeriodSerializerMixin, serializers.ModelSerial
         return data
 
 
-class ComboItemSerializer(serializers.Serializer):
-    """Product of a combo on read, with its own price to show the saving."""
+class ComboItemSerializer(ViewerAllergenFieldsMixin, serializers.Serializer):
+    """Product of a combo on read, with its own price to show the saving and
+    its allergens (the viewer's conflicts are marked like in MenuItemSerializer)."""
     product_id = serializers.IntegerField(source='menu_item.id')
     name = serializers.CharField(source='menu_item.name')
     price = serializers.DecimalField(source='menu_item.price', max_digits=6, decimal_places=2)
     quantity = serializers.IntegerField()
+    allergens = AllergenSerializer(source='menu_item.allergens', many=True, read_only=True)
+
+    def allergen_source(self, obj):
+        return obj.menu_item
 
 
 class ComboItemInputSerializer(serializers.Serializer):
@@ -426,6 +457,6 @@ class ComboSerializer(ValidityPeriodSerializerMixin, serializers.ModelSerializer
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
-        data['items'] = ComboItemSerializer(instance.items.all(), many=True).data
+        data['items'] = ComboItemSerializer(instance.items.all(), many=True, context=self.context).data
         data['regular_price'] = str(instance.regular_price())
         return data

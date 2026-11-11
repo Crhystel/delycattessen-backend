@@ -2,7 +2,7 @@ from django.conf import settings
 from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
 
-from core.serializer_mixins import LineSummaryMixin
+from core.serializer_mixins import LineSummaryMixin, absolute_image_url
 from core.timezone import local_today
 from .models import PreOrder, PreOrderItem, ReportExport, Sale
 from .services import GRANULARITIES, month_start_local
@@ -10,10 +10,14 @@ from .services import GRANULARITIES, month_start_local
 
 class PreOrderItemDetailSerializer(serializers.ModelSerializer):
     dish_name = serializers.CharField(source='dish.name', read_only=True)
+    image = serializers.SerializerMethodField()
 
     class Meta:
         model = PreOrderItem
-        fields = ('id', 'dish', 'dish_name', 'quantity', 'price_at_purchase')
+        fields = ('id', 'dish', 'dish_name', 'image', 'quantity', 'price_at_purchase')
+
+    def get_image(self, obj):
+        return absolute_image_url(obj.dish.image, self.context.get('request'))
 
 
 class PreOrderItemInputSerializer(serializers.Serializer):
@@ -87,6 +91,18 @@ class ParentSaleSerializer(SaleSerializer):
 
     class Meta(SaleSerializer.Meta):
         fields = SaleSerializer.Meta.fields + ('student_id', 'student_name', 'payment_method_display')
+
+    def get_lines(self, obj):
+        # The parent's history shows each product's photo (the view prefetches them).
+        lines = [
+            (item.menu_item.name, item.quantity, item.price_at_purchase, item.menu_item.image)
+            for item in obj.items.all()
+        ]
+        lines += [
+            (combo.name, combo.quantity, combo.price_at_purchase, combo.combo.image if combo.combo else None)
+            for combo in obj.combos.all()
+        ]
+        return lines
 
     def get_student_name(self, obj):
         user = obj.customer
