@@ -1,0 +1,28 @@
+# Fuera de la imagen: secretos, entornos locales, datos y archivos de desarrollo.
+.git
+.github
+.claude
+.vscode
+.idea
+
+venv
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.coverage
+coverage.xml
+htmlcov
+
+.env
+.env.*
+
+# Se montan como volumen o se descargan al primer arranque.
+media
+models
+
+*.md
+AGENTS.md
+CLAUDE.md
+run_celery.bat
+docker-compose*.yml

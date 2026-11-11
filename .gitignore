@@ -7,6 +7,7 @@ env/
 .env.local
 .env.*
 !.env.example
+!.env.staging.example
 
 # Base de datos local
 db.sqlite3

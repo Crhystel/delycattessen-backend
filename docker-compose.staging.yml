@@ -1,0 +1,93 @@
+# Staging / semiproducción: usa la imagen que construye y publica el CI (GHCR).
+# No compila nada y no monta el código: cualquier PC con Docker puede correrlo.
+#
+#   cp .env.staging.example .env.staging     (y completa los valores)
+#   docker compose -f docker-compose.staging.yml --env-file .env.staging pull
+#   docker compose -f docker-compose.staging.yml --env-file .env.staging up -d
+#
+# BACKEND_TAG elige la versión: "develop" (staging, por defecto) o "latest" (main).
+# Para exponerlo con HTTPS sin servidor: cloudflared tunnel --url http://localhost:8000
+name: delycattessen-staging
+
+x-backend-image: &backend-image
+  image: ${BACKEND_IMAGE:-ghcr.io/crhystel/delycattessen-backend}:${BACKEND_TAG:-develop}
+
+services:
+  db:
+    image: postgres:16-alpine
+    mem_limit: 256m
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:alpine
+    command: redis-server --maxmemory 64mb --maxmemory-policy volatile-lru
+    mem_limit: 128m
+    restart: unless-stopped
+
+  rabbitmq:
+    image: rabbitmq:3
+    mem_limit: 512m
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  api:
+    <<: *backend-image
+    mem_limit: 768m
+    restart: unless-stopped
+    env_file: .env.staging
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672//
+      REDIS_URL: redis://redis:6379/1
+      BOOTSTRAP: "1"
+    volumes:
+      - media_data:/app/media
+      - models_data:/app/models
+    ports: ["${API_PORT:-8000}:8000"]
+    depends_on:
+      db: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      redis: { condition: service_started }
+
+  worker:
+    <<: *backend-image
+    command: celery -A delycattessen_backend worker -l info --concurrency=2
+    mem_limit: 384m
+    restart: unless-stopped
+    env_file: .env.staging
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672//
+      REDIS_URL: redis://redis:6379/1
+    volumes:
+      - media_data:/app/media
+      - models_data:/app/models
+    depends_on:
+      db: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      redis: { condition: service_started }
+
+volumes:
+  pgdata:
+  media_data:
+  models_data:

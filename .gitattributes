@@ -1,0 +1,3 @@
+# Los scripts de shell deben usar LF para correr dentro de contenedores Linux.
+*.sh text eol=lf
+Dockerfile text eol=lf
