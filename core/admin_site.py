@@ -38,7 +38,6 @@ class DelycattessenAdminSite(AdminSite):
             ('catalog', 'menuitem'),
             ('catalog', 'menudish'),
             ('catalog', 'monthlymenu'),
-            ('catalog', 'promotion'),
             ('catalog', 'combo'),
         )),
         ('Seguridad y sistema', (

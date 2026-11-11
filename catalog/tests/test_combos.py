@@ -118,6 +118,124 @@ class ComboTests(APITestCase):
         self.assertEqual(response.data['price'], '3.00')
         self.assertTrue(response.data['image'])
 
+    # ---- stock (derived from the products) ---------------------------------------
+    def _set_stock(self, item, stock):
+        item.stock = stock
+        item.save()
+
+    def test_combo_with_a_product_out_of_stock_is_rejected(self, _today):
+        self._set_stock(self.cola, 0)
+        self._auth(self.admin_a)
+        response = self.client.post(COMBOS, self._payload([(self.sandwich, 1), (self.cola, 1)]), format='multipart')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('Cola', str(response.data['items']))
+        self.assertFalse(Combo.objects.exists())
+
+    def test_combo_needing_more_units_than_the_stock_is_rejected(self, _today):
+        self._set_stock(self.cola, 1)
+        self._auth(self.admin_a)
+        response = self.client.post(COMBOS, self._payload([(self.cola, 2)]), format='multipart')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('Cola', str(response.data['items']))
+        self.assertFalse(Combo.objects.exists())
+
+    def test_combo_with_exactly_the_stock_is_created(self, _today):
+        self._set_stock(self.cola, 2)
+        self._auth(self.admin_a)
+        response = self.client.post(COMBOS, self._payload([(self.cola, 2)]), format='multipart')
+        self.assertEqual(response.status_code, 201, response.data)
+
+    def test_all_products_without_stock_are_named_in_the_error(self, _today):
+        self._set_stock(self.cola, 0)
+        self._set_stock(self.sandwich, 0)
+        self._auth(self.admin_a)
+        response = self.client.post(COMBOS, self._payload([(self.sandwich, 1), (self.cola, 1)]), format='multipart')
+        self.assertEqual(response.status_code, 400)
+        message = str(response.data['items'])
+        self.assertIn('Cola', message)
+        self.assertIn('Sanduche de pollo', message)
+
+    def test_editing_name_or_price_works_after_a_product_ran_out(self, _today):
+        combo = self._combo([(self.sandwich, 1), (self.cola, 1)])
+        self._set_stock(self.cola, 0)
+        self._auth(self.admin_a)
+        response = self.client.patch(
+            f'{COMBOS}{combo.id}/',
+            {
+                'name': 'Combo renombrado', 'price': '3.00',
+                'items': json.dumps([{'product_id': self.sandwich.id, 'quantity': 1},
+                                     {'product_id': self.cola.id, 'quantity': 1}]),
+            },
+            format='multipart',
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data['available_quantity'], 0)
+
+    def test_editing_to_a_larger_quantity_than_the_stock_is_rejected(self, _today):
+        combo = self._combo([(self.cola, 1)])
+        self._set_stock(self.cola, 2)
+        self._auth(self.admin_a)
+        response = self.client.patch(
+            f'{COMBOS}{combo.id}/',
+            {'items': json.dumps([{'product_id': self.cola.id, 'quantity': 3}])},
+            format='multipart',
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(combo.items.get().quantity, 1)
+
+    def test_adding_a_product_without_stock_when_editing_is_rejected(self, _today):
+        combo = self._combo([(self.sandwich, 1)])
+        self._set_stock(self.cola, 0)
+        self._auth(self.admin_a)
+        response = self.client.patch(
+            f'{COMBOS}{combo.id}/',
+            {'items': json.dumps([{'product_id': self.sandwich.id, 'quantity': 1},
+                                  {'product_id': self.cola.id, 'quantity': 1}])},
+            format='multipart',
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(combo.items.count(), 1)
+
+    def test_available_quantity_is_the_minimum_over_the_products(self, _today):
+        self._set_stock(self.sandwich, 10)
+        self._set_stock(self.cola, 5)
+        combo = self._combo([(self.sandwich, 2), (self.cola, 1)])
+        self._auth(self.staff_a)
+        row = self.client.get(ACTIVE_COMBOS).data[0]
+        self.assertEqual(row['id'], combo.id)
+        self.assertEqual(row['available_quantity'], 5)
+        self.assertTrue(row['is_available'])
+        self.assertEqual(
+            {(item['name'], item['stock'], item['is_active']) for item in row['items']},
+            {('Sanduche de pollo', 10, True), ('Cola', 5, True)},
+        )
+
+    def test_available_quantity_rounds_down_per_product(self, _today):
+        self._set_stock(self.sandwich, 5)
+        self._combo([(self.sandwich, 2)])
+        self._auth(self.staff_a)
+        self.assertEqual(self.client.get(ACTIVE_COMBOS).data[0]['available_quantity'], 2)
+
+    def test_combo_without_stock_is_listed_as_unavailable(self, _today):
+        combo = self._combo([(self.sandwich, 1), (self.cola, 1)])
+        self._set_stock(self.cola, 0)
+        self._auth(self.staff_a)
+        row = self.client.get(ACTIVE_COMBOS).data[0]
+        self.assertEqual(row['id'], combo.id)
+        self.assertEqual((row['available_quantity'], row['is_available']), (0, False))
+        self._auth(self.admin_a)
+        admin_row = self.client.get(COMBOS).data[0]
+        self.assertEqual((admin_row['available_quantity'], admin_row['is_available']), (0, False))
+
+    def test_combo_with_an_inactive_product_has_no_units(self, _today):
+        self._combo([(self.sandwich, 1), (self.cola, 1)])
+        self.cola.is_active = False
+        self.cola.save()
+        self._auth(self.staff_a)
+        row = self.client.get(ACTIVE_COMBOS).data[0]
+        self.assertEqual(row['available_quantity'], 0)
+        self.assertIn(False, [item['is_active'] for item in row['items']])
+
     def test_only_admins_of_the_institution_manage_combos(self, _today):
         self._combo([(self.sandwich, 1)])
         self._auth(self.staff_a)

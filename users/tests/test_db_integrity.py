@@ -7,7 +7,7 @@ from django.db import IntegrityError, transaction
 from django.db.models import ProtectedError
 from django.test import TestCase
 
-from catalog.models import DailyMenu, MenuItem, MonthlyMenu, Promotion
+from catalog.models import Combo, DailyMenu, MenuItem, MonthlyMenu
 from pos.models import PreOrder
 from users.models import CustomUser, Institution, ParentProfile, StudentProfile
 from wallet.models import Transaction, Wallet
@@ -112,7 +112,7 @@ class DatabaseIntegrityTests(TestCase):
 
     def test_offer_cannot_end_before_it_starts(self):
         today = date.today()
-        self.assert_rejected(lambda: Promotion.objects.create(
-            institution=self.institution, discount_percentage=10,
+        self.assert_rejected(lambda: Combo.objects.create(
+            institution=self.institution, name='x', price=Decimal('1.00'),
             start_date=today, end_date=today - timedelta(days=1),
         ))

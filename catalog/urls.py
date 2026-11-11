@@ -19,12 +19,9 @@ from .views import (
     OwnStudentMonthlyMenuView,
     StudentMonthlyMenuView,
     POSStudentMenuView,
-    PromotionListCreateView,
-    ActivePromotionListView,
     ComboListCreateView,
     ComboDetailView,
     ActiveComboListView,
-    PromotionDetailView,
 )
 
 urlpatterns = [
@@ -48,9 +45,6 @@ urlpatterns = [
     path('students/me/monthly_menu/', OwnStudentMonthlyMenuView.as_view(), name='own_student_monthly_menu'),
     path('students/<int:student_id>/monthly_menu/', StudentMonthlyMenuView.as_view(), name='student_monthly_menu'),
     path('pos/students/<int:student_id>/menu/', POSStudentMenuView.as_view(), name='pos_student_menu'),
-    path('promotions/', PromotionListCreateView.as_view(), name='promotion_list_create'),
-    path('promotions/active/', ActivePromotionListView.as_view(), name='promotion_active_list'),
-    path('promotions/<int:pk>/', PromotionDetailView.as_view(), name='promotion_detail'),
     path('combos/', ComboListCreateView.as_view(), name='combo_list_create'),
     path('combos/active/', ActiveComboListView.as_view(), name='combo_active_list'),
     path('combos/<int:pk>/', ComboDetailView.as_view(), name='combo_detail'),

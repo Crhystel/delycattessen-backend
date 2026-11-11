@@ -2,11 +2,11 @@ from decimal import Decimal
 from django.db import transaction
 from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
-from .models import MenuItem, Allergen, Ingredient, MenuDish, MonthlyMenu, DailyMenu, Promotion, Combo
+from .models import MenuItem, Allergen, Ingredient, MenuDish, MonthlyMenu, DailyMenu, Combo
 from .mixins import (
     AllergenSyncMixin, IngredientValidationMixin, ValidityPeriodSerializerMixin, ViewerAllergenFieldsMixin,
 )
-from .services import ComboService, PromotionService, resync_allergens_for_ingredient
+from .services import ComboService, resync_allergens_for_ingredient
 
 
 class AllergenSerializer(serializers.ModelSerializer):
@@ -78,10 +78,6 @@ class MenuItemSerializer(
     requests — without this, a new product created with an image upload
     could come back with both False despite the model's default=True.
 
-    `price` is always the original price; `discount_percentage` and
-    `final_price` reflect the promotion in force today (see PromotionService),
-    so they go back to null/`price` on their own once it expires.
-
     `has_viewer_allergens` / `conflicting_allergens` mark, for whoever is asking,
     the allergens of the product that affect them (see ViewerAllergenContextMixin)."""
 
@@ -102,20 +98,7 @@ class MenuItemSerializer(
         data = super().to_representation(instance)
         data['ingredients'] = IngredientSerializer(instance.ingredients.all(), many=True).data
         data['allergens'] = AllergenSerializer(instance.allergens.all(), many=True).data
-        discount = self._active_discount(instance)
-        data['discount_percentage'] = discount
-        data['final_price'] = str(PromotionService.discounted_price(instance.price, discount))
         return data
-
-    @staticmethod
-    def _active_discount(instance):
-        # List views prefetch today's promotions into `promotions_in_force`
-        # (see PromotionsInForceMixin) to avoid one query per product.
-        promotions = getattr(instance, 'promotions_in_force', None)
-        if promotions is None:
-            promotions = instance.promotions.in_force(PromotionService.today())
-        promotion = next(iter(promotions), None)
-        return promotion.discount_percentage if promotion else None
 
 
 class MenuDishSerializer(IngredientValidationMixin, AllergenSyncMixin, serializers.ModelSerializer):
@@ -319,70 +302,6 @@ class StudentDailyMenuSerializer(serializers.ModelSerializer):
         dishes = [d for d in obj.dishes.all() if d.is_active]
         return StudentMenuDishSerializer(dishes, many=True, context=self.context).data
 
-class PromotionProductSerializer(ViewerAllergenFieldsMixin, serializers.ModelSerializer):
-    allergens = AllergenSerializer(many=True, read_only=True)
-
-    class Meta:
-        model = MenuItem
-        fields = [
-            'id', 'name', 'price', 'image',
-            'allergens', 'has_viewer_allergens', 'conflicting_allergens',
-        ]
-
-
-class PromotionSerializer(ValidityPeriodSerializerMixin, serializers.ModelSerializer):
-    """
-    `products` is writable as a list of MenuItem ids of the target institution
-    (context['institution']) and returned nested on read. `status` is never
-    stored: it is derived from today's date, so a promotion becomes "Vencida"
-    by itself and its products go back to their original price.
-    """
-    products = serializers.PrimaryKeyRelatedField(
-        many=True,
-        queryset=MenuItem.objects.filter(is_active=True),
-        allow_empty=False,
-        error_messages={'empty': _('Selecciona al menos un producto para la promoción.')},
-    )
-    discount_percentage = serializers.IntegerField(
-        min_value=1,
-        max_value=99,
-        error_messages={
-            'min_value': _('El descuento debe estar entre 1%% y 99%%.'),
-            'max_value': _('El descuento debe estar entre 1%% y 99%%.'),
-        },
-    )
-    institution_name = serializers.CharField(source='institution.name', read_only=True)
-    service = PromotionService
-
-    class Meta:
-        model = Promotion
-        fields = [
-            'id', 'products', 'discount_percentage', 'start_date', 'end_date',
-            'image', 'status', 'institution_name',
-        ]
-
-    def validate_products(self, products):
-        institution = self.context.get('institution')
-        if institution and any(p.institution_id != institution.id for p in products):
-            raise serializers.ValidationError(_('Uno o más productos no pertenecen a esta institución.'))
-        return products
-
-    def validate(self, attrs):
-        instance = self.instance
-        start_date, end_date = self.validate_period(attrs)
-        products = attrs.get('products', instance.products.all() if instance else [])
-        PromotionService.validate_products_available(
-            products, start_date, end_date, exclude_id=getattr(instance, 'pk', None)
-        )
-        return attrs
-
-    def to_representation(self, instance):
-        data = super().to_representation(instance)
-        data['products'] = PromotionProductSerializer(
-            instance.products.all(), many=True, context=self.context
-        ).data
-        return data
-
 
 class ComboItemSerializer(ViewerAllergenFieldsMixin, serializers.Serializer):
     """Product of a combo on read, with its own price to show the saving and
@@ -391,6 +310,8 @@ class ComboItemSerializer(ViewerAllergenFieldsMixin, serializers.Serializer):
     name = serializers.CharField(source='menu_item.name')
     price = serializers.DecimalField(source='menu_item.price', max_digits=6, decimal_places=2)
     quantity = serializers.IntegerField()
+    stock = serializers.IntegerField(source='menu_item.stock', read_only=True)
+    is_active = serializers.BooleanField(source='menu_item.is_active', read_only=True)
     allergens = AllergenSerializer(source='menu_item.allergens', many=True, read_only=True)
 
     def allergen_source(self, obj):
@@ -407,7 +328,8 @@ class ComboSerializer(ValidityPeriodSerializerMixin, serializers.ModelSerializer
     `items` is written as a JSON list of {product_id, quantity} — sent as text
     because the request is multipart (it carries the image) — and returned
     nested on read together with `regular_price`, the price of the products
-    bought separately.
+    bought separately, and `available_quantity`/`is_available`: the units that
+    the stock of its products allows (the combo has no stock of its own).
     """
     items = serializers.JSONField(binary=True, write_only=True)
     price = serializers.DecimalField(
@@ -436,6 +358,11 @@ class ComboSerializer(ValidityPeriodSerializerMixin, serializers.ModelSerializer
         institution = self.context.get('institution')
         if institution and any(product.institution_id != institution.id for product in products):
             raise serializers.ValidationError(_('Uno o más productos no pertenecen a esta institución.'))
+        current = (
+            {item.menu_item_id: item.quantity for item in self.instance.items.all()}
+            if self.instance else {}
+        )
+        ComboService.validate_stock(pairs, current)
         return pairs
 
     def validate(self, attrs):
@@ -459,4 +386,6 @@ class ComboSerializer(ValidityPeriodSerializerMixin, serializers.ModelSerializer
         data = super().to_representation(instance)
         data['items'] = ComboItemSerializer(instance.items.all(), many=True, context=self.context).data
         data['regular_price'] = str(instance.regular_price())
+        data['available_quantity'] = ComboService.available_units(instance)
+        data['is_available'] = data['available_quantity'] > 0
         return data

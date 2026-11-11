@@ -6,7 +6,7 @@ from django.contrib import admin
 
 from core.admin_mixins import ReadOnlyAdminMixin, ReadOnlyInlineMixin
 
-from .models import Allergen, Combo, ComboItem, Ingredient, MenuDish, MenuItem, MonthlyMenu, Promotion
+from .models import Allergen, Combo, ComboItem, Ingredient, MenuDish, MenuItem, MonthlyMenu
 
 
 class ComboItemInline(ReadOnlyInlineMixin, admin.TabularInline):
@@ -48,13 +48,6 @@ class MenuDishAdmin(ReadOnlyAdminMixin, admin.ModelAdmin):
 class MonthlyMenuAdmin(ReadOnlyAdminMixin, admin.ModelAdmin):
     list_display = ('institution', 'year', 'month', 'status', 'published_at')
     list_filter = ('institution', 'status', 'year')
-    list_select_related = ('institution',)
-
-
-@admin.register(Promotion)
-class PromotionAdmin(ReadOnlyAdminMixin, admin.ModelAdmin):
-    list_display = ('discount_percentage', 'institution', 'start_date', 'end_date')
-    list_filter = ('institution',)
     list_select_related = ('institution',)
 
 
