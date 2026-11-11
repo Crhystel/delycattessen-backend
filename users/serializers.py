@@ -28,7 +28,7 @@ class CreateStaffSerializer(UppercaseNamesMixin, serializers.ModelSerializer):
         choices=[(User.Role.TEACHER, _('Docente')), (User.Role.OPERATIONS_STAFF, _('Personal Operativo'))]
     )
     institution_id = serializers.PrimaryKeyRelatedField(
-        queryset=Institution.objects.all(), source='institution', write_only=True, required=False
+        queryset=Institution.objects.filter(is_active=True), source='institution', write_only=True, required=False
     )
     institution_name = serializers.CharField(source='institution.name', read_only=True)
 
@@ -135,7 +135,7 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
 class InstitutionSerializer(serializers.ModelSerializer):
     class Meta:
         model = Institution
-        fields = ('id', 'name')
+        fields = ('id', 'name', 'is_active')
 
 
 class MeSerializer(serializers.ModelSerializer):
@@ -207,7 +207,7 @@ class StudentRegistrationSerializer(UppercaseNamesMixin,serializers.Serializer):
     first_last_name = serializers.CharField(max_length=150)
     second_last_name = serializers.CharField(max_length=150, required=False, allow_blank=True)
     institution_id = serializers.PrimaryKeyRelatedField(
-        queryset=Institution.objects.all(), source='institution',
+        queryset=Institution.objects.filter(is_active=True), source='institution',
     )
     username = serializers.CharField(max_length=150)
     password = PasswordField()

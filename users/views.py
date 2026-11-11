@@ -20,7 +20,8 @@ from catalog.models import Allergen
 from core.mixins import InstitutionScopeMixin
 
 from .mixins import TokenGeneratorMixin
-from .models import CustomUser, Institution, ParentalControl, StudentProfile
+from .audit import record_audit
+from .models import AuditLog, CustomUser, Institution, ParentalControl, StudentProfile
 from .permissions import (
     CanEditOwnProfile,
     CanManageStaffAccount,
@@ -99,6 +100,10 @@ class StaffViewSet(InstitutionScopeMixin, ModelViewSet):
             target_institution=serializer.context.get('institution'),
         )
         email_sent = notify_staff_credentials(user, temporary_password)
+        record_audit(
+            AuditLog.Action.ACCOUNT_CREATED, actor=request.user, target=user, request=request,
+            source=AuditLog.Source.API, detail={'role': user.role, 'email_sent': email_sent},
+        )
         return Response(
             {
                 "message": str(_('%(role)s creado exitosamente.')) % {'role': user.get_role_display()},
@@ -112,14 +117,33 @@ class StaffViewSet(InstitutionScopeMixin, ModelViewSet):
             status=status.HTTP_201_CREATED
         )
 
+    def perform_update(self, serializer):
+        was_active = serializer.instance.is_active
+        user = serializer.save()
+        if user.is_active != was_active:
+            record_audit(
+                AuditLog.Action.ACCOUNT_ACTIVATED if user.is_active else AuditLog.Action.ACCOUNT_DEACTIVATED,
+                actor=self.request.user, target=user, request=self.request, source=AuditLog.Source.API,
+            )
+
     def perform_destroy(self, instance):
         soft_delete_account(instance)
+        record_audit(
+            AuditLog.Action.ACCOUNT_REMOVED, actor=self.request.user, target=instance, request=self.request,
+            source=AuditLog.Source.API, detail={'role': instance.role},
+        )
         
         
 class InstitutionListView(generics.ListAPIView):
     serializer_class = InstitutionSerializer
     permission_classes = [IsAuthenticated]
-    queryset = Institution.objects.all().order_by('name')
+
+    def get_queryset(self):
+        # A suspended sede only matters to the administrators; everybody else picks among active ones.
+        queryset = Institution.objects.order_by('name')
+        if self.request.user.role != CustomUser.Role.ADMIN:
+            queryset = queryset.filter(is_active=True)
+        return queryset
 
 class BasePasswordResetView(generics.GenericAPIView):
     permission_classes = [CanRequestPasswordReset]
@@ -478,4 +502,8 @@ class ChangePasswordView(BasePasswordResetView):
 
     def process_recovery_action(self, serializer):
         user = serializer.save()
+        record_audit(
+            AuditLog.Action.PASSWORD_CHANGED, actor=user, target=user, request=self.request,
+            source=AuditLog.Source.API,
+        )
         return rotate_user_tokens(user)

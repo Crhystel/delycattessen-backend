@@ -7,6 +7,16 @@ from django.contrib.auth.hashers import check_password, make_password
 
 class Institution(models.Model):
     name = models.CharField(_('name'), max_length=255, unique=True)
+    code = models.CharField(_('código'), max_length=20, unique=True, null=True, blank=True)
+    address = models.CharField(_('dirección'), max_length=255, blank=True)
+    phone = models.CharField(_('teléfono'), max_length=30, blank=True)
+    contact_name = models.CharField(_('persona de contacto'), max_length=150, blank=True)
+    contact_email = models.EmailField(_('correo de contacto'), blank=True)
+    # A suspended sede is hidden from new registrations (students, staff); its existing
+    # accounts, sessions and sales keep working (see InstitutionAdmin).
+    is_active = models.BooleanField(_('activa'), default=True)
+    suspended_at = models.DateTimeField(_('suspendida el'), null=True, blank=True)
+    suspension_reason = models.CharField(_('motivo de la suspensión'), max_length=255, blank=True)
     registration_date = models.DateTimeField(_('registration date'), auto_now_add=True)
 
     def __str__(self) -> str:
@@ -15,6 +25,10 @@ class Institution(models.Model):
     class Meta:
         verbose_name = _('institución')
         verbose_name_plural = _('instituciones')
+        constraints = [
+            # `name` is already unique; this also treats "Colegio" and "colegio" as the same sede.
+            models.UniqueConstraint(Lower('name'), name='users_institution_name_ci_unique'),
+        ]
 
 
 class CustomUserManager(UserManager):
@@ -188,3 +202,52 @@ class UserBiometric(models.Model):
     class Meta:
         verbose_name = _('registro biométrico')
         verbose_name_plural = _('registros biométricos')
+
+
+class AuditLog(models.Model):
+    """Who did what and when for the actions that change accounts, passwords, roles and
+    sedes (from the API, the superadmin or the system). Copies of the names are kept
+    because accounts are anonymised when they are removed. `detail` never holds secrets."""
+
+    class Action(models.TextChoices):
+        ACCOUNT_CREATED = 'ACCOUNT_CREATED', _('Cuenta creada')
+        ACCOUNT_ACTIVATED = 'ACCOUNT_ACTIVATED', _('Cuenta activada')
+        ACCOUNT_DEACTIVATED = 'ACCOUNT_DEACTIVATED', _('Cuenta desactivada')
+        ACCOUNT_REMOVED = 'ACCOUNT_REMOVED', _('Cuenta dada de baja')
+        PASSWORD_RESET = 'PASSWORD_RESET', _('Contraseña restablecida')
+        PASSWORD_CHANGED = 'PASSWORD_CHANGED', _('Contraseña cambiada')
+        ROLE_CHANGED = 'ROLE_CHANGED', _('Rol cambiado')
+        INSTITUTION_UPDATED = 'INSTITUTION_UPDATED', _('Sede editada')
+        INSTITUTION_SUSPENDED = 'INSTITUTION_SUSPENDED', _('Sede suspendida')
+        INSTITUTION_REACTIVATED = 'INSTITUTION_REACTIVATED', _('Sede reactivada')
+        TASK_FAILED = 'TASK_FAILED', _('Tarea fallida')
+
+    class Source(models.TextChoices):
+        API = 'API', _('App o panel web')
+        ADMIN = 'ADMIN', _('Panel superadmin')
+        SYSTEM = 'SYSTEM', _('Sistema')
+
+    actor = models.ForeignKey(
+        CustomUser, verbose_name=_('actor'), on_delete=models.SET_NULL, null=True, blank=True, related_name='+',
+    )
+    actor_label = models.CharField(_('actor'), max_length=150, blank=True)
+    action = models.CharField(_('acción'), max_length=30, choices=Action.choices)
+    target_type = models.CharField(_('tipo de objeto'), max_length=30, blank=True)
+    target_id = models.PositiveBigIntegerField(_('id del objeto'), null=True, blank=True)
+    target_label = models.CharField(_('objeto'), max_length=200, blank=True)
+    institution = models.ForeignKey(
+        Institution, verbose_name=_('institution'), on_delete=models.SET_NULL, null=True, blank=True, related_name='+',
+    )
+    source = models.CharField(_('origen'), max_length=10, choices=Source.choices, default=Source.ADMIN)
+    ip = models.GenericIPAddressField(_('IP'), null=True, blank=True)
+    detail = models.JSONField(_('detalle'), default=dict, blank=True)
+    created_at = models.DateTimeField(_('fecha'), auto_now_add=True, db_index=True)
+
+    class Meta:
+        verbose_name = _('bitácora de acciones')
+        verbose_name_plural = _('bitácora de acciones')
+        ordering = ['-created_at']
+        indexes = [models.Index(fields=['action', 'created_at'], name='users_audit_action_idx')]
+
+    def __str__(self) -> str:
+        return f'{self.get_action_display()} · {self.target_label or self.target_type} · {self.created_at:%Y-%m-%d %H:%M}'

@@ -15,9 +15,19 @@ class CoreConfig(AppConfig):
         from django_celery_results.models import GroupResult, TaskResult
         from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
 
-        noise = (Group, TaskResult, GroupResult, OutstandingToken, BlacklistedToken, AccessLog, AccessFailureLog)
+        from .admin_mixins import ReadOnlyAdminMixin
+
+        noise = (Group, TaskResult, GroupResult, OutstandingToken, BlacklistedToken, AccessFailureLog, AccessLog)
         for model in noise:
             try:
                 admin.site.unregister(model)
             except NotRegistered:
                 pass
+
+        # The login history of the panel stays, but as a record that cannot be edited or erased.
+        @admin.register(AccessLog, site=admin.site)
+        class AccessLogAdmin(ReadOnlyAdminMixin, admin.ModelAdmin):
+            list_display = ('attempt_time', 'username', 'ip_address', 'logout_time', 'http_accept')
+            list_filter = ('attempt_time',)
+            search_fields = ('username', 'ip_address')
+            date_hierarchy = 'attempt_time'

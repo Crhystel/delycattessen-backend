@@ -93,6 +93,8 @@ def create_staff_account(validated_data, admin, target_institution=None):
     data = dict(validated_data)
     data.pop('is_active', None)
     institution = data.pop('institution', None) or target_institution or admin.institution
+    if institution is not None and not institution.is_active:
+        raise ValidationError({'institution': _('Esta institución está suspendida: no admite cuentas nuevas.')})
     temporary_password = generate_temporary_password()
     user = CustomUser.objects.create_user(
         username=data['email'],

@@ -55,19 +55,17 @@ class SuperadminSiteTests(SuperadminTestCase):
         response = self.client.get(reverse('admin:index'))
         self.assertEqual(response.status_code, 200)
         titles = [section['name'] for section in response.context['app_list']]
-        self.assertEqual(titles, [
-            'Personas y cuentas',
-            'Billetera y ventas (solo lectura)',
-            'Catálogo y menús (solo lectura)',
-            'Seguridad y sistema',
-        ])
+        self.assertEqual(titles, ['Personas y cuentas', 'Seguridad y sistema'])
 
     def test_internal_bookkeeping_models_are_hidden(self):
         response = self.client.get(reverse('admin:index'))
         shown = {m['object_name'] for section in response.context['app_list'] for m in section['models']}
         for hidden in ('Group', 'TaskResult', 'GroupResult', 'OutstandingToken', 'BlacklistedToken',
-                       'AccessLog', 'AccessFailureLog'):
+                       'AccessFailureLog'):
             self.assertNotIn(hidden, shown)
+        # The audit trail and the login history are shown instead, and cannot be edited.
+        for visible in ('AuditLog', 'LogEntry', 'AccessLog', 'AccessAttempt'):
+            self.assertIn(visible, shown)
 
     def test_no_registered_model_can_be_deleted(self):
         request = RequestFactory().get('/')
@@ -87,17 +85,16 @@ class SuperadminSiteTests(SuperadminTestCase):
         response = self.client.get(reverse('admin:users_customuser_delete', args=[user.pk]))
         self.assertEqual(response.status_code, 403)
 
-    def test_money_and_catalog_tables_are_read_only(self):
-        _parent, student = self.make_family()
-        wallet = Wallet.objects.get(student__user=student)
-        self.assertEqual(self.client.get(reverse('admin:wallet_wallet_change', args=[wallet.pk])).status_code, 200)
-        for name in ('admin:wallet_wallet_add', 'admin:wallet_transaction_add', 'admin:pos_sale_add',
-                     'admin:catalog_menuitem_add', 'admin:catalog_allergen_add'):
-            self.assertEqual(self.client.get(reverse(name)).status_code, 403, name)
-        response = self.client.post(reverse('admin:wallet_wallet_change', args=[wallet.pk]), {'balance': '999'})
-        self.assertEqual(response.status_code, 403)
-        wallet.refresh_from_db()
-        self.assertEqual(wallet.balance, 0)
+    def test_only_people_management_tables_are_registered(self):
+        registered = {model._meta.label_lower for model in admin.site._registry}
+        for gone in ('wallet.wallet', 'wallet.transaction', 'pos.sale', 'pos.preorder', 'pos.creditstatement',
+                     'pos.reportexport', 'catalog.allergen', 'catalog.ingredient', 'catalog.menuitem',
+                     'catalog.menudish', 'catalog.monthlymenu', 'catalog.combo', 'users.parentalcontrol',
+                     'users.userbiometric'):
+            self.assertNotIn(gone, registered)
+        for kept in ('users.customuser', 'users.parentprofile', 'users.studentprofile', 'users.institution',
+                     'users.auditlog'):
+            self.assertIn(kept, registered)
 
     def test_profiles_are_read_only_and_hide_sensitive_data(self):
         parent_user, student_user = self.make_family()
@@ -109,14 +106,6 @@ class SuperadminSiteTests(SuperadminTestCase):
         student = student_user.student_profile
         response = self.client.get(reverse('admin:users_studentprofile_change', args=[student.pk]))
         self.assertNotContains(response, 'profile_picture')
-
-    def test_biometric_vector_is_never_exposed(self):
-        _parent, student_user = self.make_family()
-        from users.models import UserBiometric
-        bio = UserBiometric.objects.create(user=student_user, encrypted_embedding=b'x', nonce=b'n', tag=b't')
-        response = self.client.get(reverse('admin:users_userbiometric_change', args=[bio.pk]))
-        self.assertEqual(response.status_code, 200)
-        self.assertNotContains(response, 'encrypted_embedding')
 
     def test_the_action_log_is_visible_but_not_editable(self):
         LogEntry.objects.log_actions(
@@ -202,21 +191,21 @@ class AccountEditingTests(SuperadminTestCase):
     def change_url(self, user):
         return reverse('admin:users_customuser_change', args=[user.pk])
 
-    def test_role_and_username_are_not_editable(self):
+    def test_username_is_not_editable_and_role_stays_within_staff_roles(self):
         user = self.make_staff('cajero@x.com')
         self.client.post(self.change_url(user), {
             'email': 'cajero@x.com', 'first_name': 'ANA', 'last_name': 'PEREZ', 'institution': self.institution.pk,
-            'is_active': 'on', 'role': Role.ADMIN, 'username': 'otro',
+            'is_active': 'on', 'role': Role.STUDENT, 'username': 'otro',
         })
         user.refresh_from_db()
-        self.assertEqual(user.role, Role.OPERATIONS_STAFF)
+        self.assertEqual(user.role, Role.OPERATIONS_STAFF)  # STUDENT is not an allowed choice
         self.assertEqual(user.username, 'cajero@x.com')
 
     def test_changing_the_email_keeps_username_in_sync_and_lowercases(self):
         user = self.make_staff('cajero@x.com')
         response = self.client.post(self.change_url(user), {
             'email': 'Nuevo@X.com', 'first_name': 'ana', 'last_name': 'perez', 'institution': self.institution.pk,
-            'is_active': 'on',
+            'is_active': 'on', 'role': Role.OPERATIONS_STAFF,
         })
         self.assertEqual(response.status_code, 302)
         user.refresh_from_db()
@@ -318,11 +307,13 @@ class AccountActionTests(SuperadminTestCase):
         operative = self.make_staff('cajero@x.com')
         old_hash = operative.password
         RefreshToken.for_user(operative)
-        with patch('users.admin.notify_staff_credentials', return_value=True) as notify:
+        with patch('users.admin_services.notify_password_reset', return_value=True) as notify:
             self.run_action('reset_temporary_password', [operative])
         operative.refresh_from_db()
         self.assertNotEqual(operative.password, old_hash)
         self.assertTrue(operative.must_change_password)
         self.assertEqual(BlacklistedToken.objects.filter(token__user=operative).count(), 1)
         notify.assert_called_once()
-        self.assertTrue(operative.check_password(notify.call_args.args[1]))
+        recipient, user, login, temporary = notify.call_args.args
+        self.assertEqual((recipient, login, user), (operative.email, operative.email, operative))
+        self.assertTrue(operative.check_password(temporary))

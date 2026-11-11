@@ -1,0 +1,39 @@
+{% extends "admin/index.html" %}
+{% load i18n %}
+
+{% block extrastyle %}{{ block.super }}
+<style>
+  .dl-panel { margin: 0 0 24px 0; }
+  .dl-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+  .dl-panel-head h2 { margin: 0; border: 0; padding: 0; background: none; color: var(--body-fg); text-transform: none; font-size: 1.05rem; }
+  .dl-alert { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; margin: 0 0 6px 0; border-radius: 6px; }
+  .dl-alert.error { background: var(--message-error-bg); }
+  .dl-alert.warning { background: var(--message-warning-bg); }
+  .dl-alert.info { background: var(--message-success-bg); }
+  .dl-alert a { font-weight: 600; white-space: nowrap; }
+  .dl-count { font-weight: 700; margin-right: 8px; }
+  .dl-ok { padding: 10px 14px; border-radius: 6px; background: var(--message-success-bg); }
+  .dl-hint { opacity: .75; font-size: .85em; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="dl-panel" id="alerts-panel">
+  <div class="dl-panel-head">
+    <h2>Alertas</h2>
+    <a href="{{ system_status_url }}">Ver estado del sistema &rarr;</a>
+  </div>
+  {% for alert in alerts %}
+    <div class="dl-alert {{ alert.level }}">
+      <span>
+        {% if alert.count %}<span class="dl-count">{{ alert.count }}</span>{% endif %}{{ alert.title }}
+        {% if alert.hint %}<span class="dl-hint"> · {{ alert.hint }}</span>{% endif %}
+      </span>
+      {% if alert.url %}<a href="{{ alert.url }}">Revisar</a>{% endif %}
+    </div>
+  {% empty %}
+    <div class="dl-ok">Todo en orden: no hay nada pendiente por atender.</div>
+  {% endfor %}
+</div>
+{{ block.super }}
+{% endblock %}

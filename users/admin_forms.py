@@ -1,4 +1,4 @@
-"""Forms of the superadmin user screens.
+"""Forms of the superadmin user and sede screens.
 
 Rules mirrored from the API (users/serializers.py): e-mail in lower case and
 unique ignoring case, names in upper case, and a sede for every staff role.
@@ -7,12 +7,11 @@ from django import forms
 from django.core.exceptions import ValidationError
 from django.utils.translation import gettext_lazy as _
 
-from .models import CustomUser
+from .admin_services import STAFF_ROLES, role_change_error
+from .models import CustomUser, Institution
 
 Role = CustomUser.Role
 
-# Roles that have a sede and no profile table; the superadmin can create them.
-STAFF_ROLES = (Role.ADMIN, Role.OPERATIONS_STAFF, Role.TEACHER)
 NAME_FIELDS = ('first_name', 'second_name', 'last_name', 'second_last_name')
 NAME_LABELS = {
     'first_name': _('Primer nombre'),
@@ -58,9 +57,14 @@ class StaffAccountCreationForm(AccountFieldsMixin, forms.ModelForm):
         self.fields['role'].initial = Role.TEACHER
         for required in ('email', 'first_name', 'last_name', 'institution'):
             self.fields[required].required = True
+        # A suspended sede takes no new accounts.
+        self.fields['institution'].queryset = Institution.objects.filter(is_active=True)
 
 
 class CustomUserChangeForm(AccountFieldsMixin, forms.ModelForm):
+    # Set by CustomUserAdmin.get_form: who is editing (a superadmin cannot change their own role).
+    actor = None
+
     class Meta:
         model = CustomUser
         fields = '__all__'
@@ -74,9 +78,44 @@ class CustomUserChangeForm(AccountFieldsMixin, forms.ModelForm):
             'is_superuser': _('Superadministrador'),
         }
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if 'role' in self.fields and self.instance.role in STAFF_ROLES:
+            self.fields['role'].choices = [(value, label) for value, label in Role.choices if value in STAFF_ROLES]
+            self.fields['role'].help_text = _(
+                'Solo entre docente, personal operativo y administrador. Se cierran sus sesiones al cambiarlo.'
+            )
+
     def clean(self):
         cleaned = super().clean()
-        role = self.instance.role
+        role = cleaned.get('role', self.instance.role)
+        if 'role' in self.fields and role != self.instance.role:
+            message = role_change_error(self.instance, role, self.actor)
+            if message:
+                self.add_error('role', message)
         if role in STAFF_ROLES and 'institution' in self.fields and not cleaned.get('institution'):
             self.add_error('institution', _('Esta cuenta necesita una institución.'))
+        return cleaned
+
+
+class InstitutionForm(forms.ModelForm):
+    class Meta:
+        model = Institution
+        fields = '__all__'
+
+    def clean_name(self):
+        name = (self.cleaned_data['name'] or '').strip()
+        clash = Institution.objects.filter(name__iexact=name).exclude(pk=self.instance.pk)
+        if clash.exists():
+            raise ValidationError(_('Ya existe una institución con este nombre.'))
+        return name
+
+    def clean_code(self):
+        return (self.cleaned_data.get('code') or '').strip().upper() or None
+
+    def clean(self):
+        cleaned = super().clean()
+        if self.instance.pk and self.instance.is_active and not cleaned.get('is_active', True):
+            if not (cleaned.get('suspension_reason') or '').strip():
+                self.add_error('suspension_reason', _('Indica el motivo para suspender la sede.'))
         return cleaned

@@ -1,0 +1,59 @@
+{% extends "admin/base_site.html" %}
+{% load i18n admin_urls %}
+
+{% block extrastyle %}{{ block.super }}
+<style>
+  .dl-checks { width: 100%; }
+  .dl-checks td, .dl-checks th { padding: 10px 12px; vertical-align: top; }
+  .dl-pill { display: inline-block; min-width: 78px; text-align: center; padding: 2px 10px; border-radius: 999px; font-weight: 700; font-size: .8rem; }
+  .dl-pill.ok { background: var(--message-success-bg); }
+  .dl-pill.warning { background: var(--message-warning-bg); }
+  .dl-pill.error { background: var(--message-error-bg); }
+  .dl-pill.info { background: var(--darkened-bg); }
+  .dl-overall { margin: 0 0 16px 0; padding: 12px 16px; border-radius: 6px; font-weight: 600; }
+  .dl-overall.ok { background: var(--message-success-bg); }
+  .dl-overall.warning { background: var(--message-warning-bg); }
+  .dl-overall.error { background: var(--message-error-bg); }
+</style>
+{% endblock %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+  <a href="{% url 'admin:index' %}">{% translate 'Home' %}</a> &rsaquo; Estado del sistema
+</div>
+{% endblock %}
+
+{% block content %}
+<div id="content-main">
+  <div class="dl-overall {{ overall }}">
+    {% if overall == 'ok' %}Todos los componentes responden.
+    {% elif overall == 'warning' %}Hay avisos que conviene revisar.
+    {% else %}Hay componentes con fallas.{% endif %}
+  </div>
+
+  <table class="dl-checks">
+    <thead><tr><th>Componente</th><th>Estado</th><th>Detalle</th><th>Tiempo</th></tr></thead>
+    <tbody>
+      {% for check in checks %}
+      <tr>
+        <td><strong>{{ check.name }}</strong></td>
+        <td><span class="dl-pill {{ check.status }}">
+          {% if check.status == 'ok' %}Correcto{% elif check.status == 'warning' %}Aviso{% elif check.status == 'error' %}Falla{% else %}Información{% endif %}
+        </span></td>
+        <td>{{ check.detail }}</td>
+        <td>{% if check.elapsed_ms %}{{ check.elapsed_ms }} ms{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <form method="post" style="margin-top: 18px">
+    {% csrf_token %}
+    <input type="submit" name="check_smtp" value="{% if smtp_checked %}Volver a comprobar{% else %}Comprobar{% endif %} el correo (SMTP)">
+    <span class="help" style="margin-left: 8px">Inicia sesión en el servidor de correo sin enviar nada.</span>
+  </form>
+  <p class="help" style="margin-top: 12px">
+    Recargar la página vuelve a comprobar todo lo demás. Los datos de esta pantalla no se guardan.
+  </p>
+</div>
+{% endblock %}

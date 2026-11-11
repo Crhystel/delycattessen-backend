@@ -177,6 +177,8 @@ REST_FRAMEWORK = {
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(hours=1),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=15),
+    # Records `last_login` on every API login: "last access" in the superadmin and its alerts.
+    'UPDATE_LAST_LOGIN': True,
 }
 AUTHENTICATION_BACKENDS = [
     'axes.backends.AxesStandaloneBackend',  # lockout after repeated failures (admin login)

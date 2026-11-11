@@ -182,12 +182,14 @@ Comandos útiles: `docker compose logs -f api worker` (ver logs) y `docker compo
 
 ## Panel superadmin (`/admin/`)
 
-Panel técnico de Django para el superusuario, agrupado por funcionalidad: **Personas y cuentas**, **Billetera y ventas**, **Catálogo y menús** y **Seguridad y sistema**.
+Panel técnico de Django para el superusuario, enfocado en gestionar personas. Entra con su **usuario** (no con el correo). Tiene dos secciones: **Personas y cuentas** (usuarios, padres, estudiantes e instituciones) y **Seguridad y sistema** (bitácora de acciones, registro de acciones del panel, historial de accesos e intentos de acceso).
 
-- **Personas y cuentas** es lo editable: usuarios, instituciones y el acceso de cada cuenta. Las cuentas de personal (administrador, docente y operativo) se crean aquí con contraseña temporal por correo; los padres y estudiantes se registran desde la app (que crea su perfil y su billetera).
-- **Billetera, ventas y catálogo** son de **solo lectura**: sus saldos, totales y alérgenos los mantiene la API, y el catálogo se edita desde el panel web.
-- **Nada se borra desde el admin.** En su lugar hay acciones: activar, desactivar (cierra las sesiones), dar de baja al personal (eliminación lógica) y restablecer la contraseña temporal. La base de datos además protege el historial: no deja eliminar usuarios, perfiles ni billeteras con movimientos.
-- El login del admin se bloquea tras varios intentos fallidos (`AXES_FAILURE_LIMIT`, `AXES_COOLOFF_HOURS`); para desbloquear, abre *Seguridad y sistema → Intentos de acceso* y elimina el registro. La ruta (`ADMIN_URL`), la duración de la sesión y los orígenes CSRF se configuran en el `.env` (ver `.env.example`).
+- **Alertas:** al abrir el panel se ven los pendientes (cuentas a medio crear, sedes sin administrador, logins bloqueados, tareas fallidas, reportes o recargas atascados). **Estado del sistema** (enlace en las alertas) comprueba base de datos, caché, RabbitMQ, workers de Celery, migraciones, archivos subidos y, con un botón, el correo.
+- **Usuarios:** se crean aquí las cuentas de personal (administrador, docente y operativo) con contraseña temporal por correo; los padres y estudiantes se registran desde la app. Acciones: activar, desactivar (cierra las sesiones), dar de baja al personal (eliminación lógica) y **restablecer la contraseña temporal de cualquier rol** (a su correo; la de un estudiante, al correo de su padre). También se puede **cambiar el rol** entre docente, personal operativo y administrador (no en padres, estudiantes, superadministradores ni en la propia cuenta, ni a un docente con crédito).
+- **Sedes:** datos, estadísticas por sede (personal, estudiantes, saldo, ventas del mes) y suspensión con motivo. Una sede suspendida no aparece al registrar estudiantes ni personal nuevo; sus cuentas, sesiones y ventas siguen funcionando. Solo se puede eliminar una sede sin ninguna dependencia.
+- **Bitácora de acciones:** quién hizo qué y cuándo (app, panel y sistema), sin contraseñas ni datos secretos.
+- **Nada se borra desde el admin** y la base de datos protege el historial: no deja eliminar usuarios, perfiles ni billeteras con movimientos.
+- El login del admin se bloquea tras varios intentos fallidos (`AXES_FAILURE_LIMIT`, `AXES_COOLOFF_HOURS`); para desbloquear, abre *Intentos de acceso* y elimina el registro. La ruta (`ADMIN_URL`), la duración de la sesión, los orígenes CSRF y `APP_VERSION` (se muestra en el estado del sistema) se configuran en el `.env` (ver `.env.example`).
 - Con gunicorn (staging) el CSS del admin lo sirve whitenoise; `collectstatic` se ejecuta al construir la imagen.
 
 ## Pipeline CI/CD

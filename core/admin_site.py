@@ -1,6 +1,9 @@
 from django.contrib.admin import AdminSite
-from django.urls import reverse
+from django.template.response import TemplateResponse
+from django.urls import path, reverse
 from django.utils.text import slugify
+
+from . import alerts, health
 
 
 class DelycattessenAdminSite(AdminSite):
@@ -9,39 +12,25 @@ class DelycattessenAdminSite(AdminSite):
     It names models by (app_label, model name) strings and imports no app, so
     `core` keeps depending on nothing. A registered model that is not listed in
     SECTIONS still shows up, under "Otros", so it can never be hidden by mistake.
+    The index also shows the alerts and links to the system status page.
     """
 
     site_header = "D'Elycattessen · Administración"
     site_title = "D'Elycattessen"
     index_title = 'Panel del superadministrador'
+    index_template = 'admin/delycattessen_index.html'
 
     SECTIONS = (
         ('Personas y cuentas', (
             ('users', 'customuser'),
             ('users', 'parentprofile'),
             ('users', 'studentprofile'),
-            ('users', 'parentalcontrol'),
-            ('users', 'userbiometric'),
             ('users', 'institution'),
         )),
-        ('Billetera y ventas (solo lectura)', (
-            ('wallet', 'wallet'),
-            ('wallet', 'transaction'),
-            ('pos', 'sale'),
-            ('pos', 'preorder'),
-            ('pos', 'creditstatement'),
-            ('pos', 'reportexport'),
-        )),
-        ('Catálogo y menús (solo lectura)', (
-            ('catalog', 'allergen'),
-            ('catalog', 'ingredient'),
-            ('catalog', 'menuitem'),
-            ('catalog', 'menudish'),
-            ('catalog', 'monthlymenu'),
-            ('catalog', 'combo'),
-        )),
         ('Seguridad y sistema', (
-            ('admin', 'logentry'),
+            ('users', 'auditlog'),   # who did what, from the app, the superadmin and the system
+            ('admin', 'logentry'),   # changes made in this panel
+            ('axes', 'accesslog'),   # logins to this panel
             ('axes', 'accessattempt'),  # deleting a row here unlocks a blocked login
         )),
     )
@@ -51,6 +40,35 @@ class DelycattessenAdminSite(AdminSite):
         # The bulk "delete selected" action would bypass every protection.
         self.disable_action('delete_selected')
 
+    # ------------------------------------------------------------------ urls
+    def get_urls(self):
+        custom = [
+            path('estado-del-sistema/', self.admin_view(self.system_status_view), name='system_status'),
+        ]
+        return custom + super().get_urls()
+
+    def system_status_view(self, request):
+        # SMTP logs in to the mail server: only when the button is pressed.
+        checks = health.run_checks(include_smtp=request.method == 'POST' and 'check_smtp' in request.POST)
+        alerts.collect_alerts(force=True)  # the index shows the problems just found
+        context = {
+            **self.each_context(request),
+            'title': 'Estado del sistema',
+            'checks': checks,
+            'overall': health.overall_status(checks),
+            'smtp_checked': any(check.name.startswith('Correo') for check in checks),
+        }
+        return TemplateResponse(request, 'admin/system_status.html', context)
+
+    def index(self, request, extra_context=None):
+        extra_context = {
+            **(extra_context or {}),
+            'alerts': alerts.collect_alerts(),
+            'system_status_url': reverse('admin:system_status', current_app=self.name),
+        }
+        return super().index(request, extra_context)
+
+    # ------------------------------------------------------------- app list
     def _section(self, title, models):
         slug = slugify(title)
         return {
