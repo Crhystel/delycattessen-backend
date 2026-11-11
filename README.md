@@ -148,11 +148,70 @@ El backend queda disponible en `http://127.0.0.1:8000/`. El panel admin de Djang
 docker-compose down
 ```
 
+## Levantar todo el backend con un solo comando (Docker)
+
+Alternativa a los pasos 5 a 9: en vez de abrir Postgres, `runserver` y Celery por separado, se levanta todo en contenedores. Requiere Docker Desktop y el `.env` del paso 4 (sus `DB_NAME`, `DB_USER` y `DB_PASSWORD` son las credenciales de la base del contenedor).
+
+```bash
+docker compose --profile full up -d --build
+```
+
+Esto inicia Postgres, la API (`0.0.0.0:8000`, con recarga automática al editar código), el worker de Celery, Redis y RabbitMQ. La API aplica las migraciones y descarga los modelos faciales sola la primera vez. Un único proceso atiende a todos los clientes:
+
+| Cliente | URL del backend |
+|---|---|
+| Web (navegador) | `http://localhost:8000` |
+| Emulador Android | `http://10.0.2.2:8000` |
+| Celular en la misma red Wi-Fi | `http://<IP-de-tu-PC>:8000` (permitir el puerto 8000 en el firewall) |
+
+Sin el perfil `full`, `docker compose up -d` sigue levantando solo Redis y RabbitMQ, y la API y Celery se corren a mano como antes.
+
+Consumo aproximado: 1,5 a 2 GB de RAM entre todos los contenedores (cada uno tiene un tope de memoria). En equipos con poca RAM, limita Docker Desktop creando `%UserProfile%\.wslconfig`:
+
+```
+[wsl2]
+memory=3GB
+processors=2
+```
+
+y reinicia WSL con `wsl --shutdown`. Si el equipo no da, usa el flujo sin Docker de los pasos 5 a 9.
+
+Comandos útiles: `docker compose logs -f api worker` (ver logs) y `docker compose --profile full down` (detener; los datos de Postgres se conservan en un volumen).
+
 ## Pipeline CI/CD
 
-El repositorio tiene un pipeline configurado en `.github/workflows/ci.yml`, que se ejecuta automáticamente en cada push o pull request hacia las ramas `main` y `develop`. El pipeline instala las dependencias del proyecto y ejecuta las verificaciones de Django (`python manage.py check`).
+El pipeline vive en `.github/workflows/ci.yml` y se ve por etapas en la pestaña Actions de GitHub:
 
-Las variables de entorno necesarias para el pipeline están configuradas como Secrets del repositorio en GitHub (Settings > Secrets and variables > Actions), no en el código ni en archivos versionados.
+```
+1 · Lint y checks ─┐
+2 · Tests ─────────┼─► 4 · Imagen Docker ─► 5 · Deploy a staging (rama develop)
+3 · Seguridad ─────┘                      └► 6 · Deploy a producción (rama main, con aprobación)
+```
+
+- **Se dispara** en cada push o pull request hacia `main` y `develop` (no corre si solo cambian archivos `.md`; un push nuevo cancela la corrida anterior).
+- **1 · Lint y checks:** sintaxis, `manage.py check` y que no falten migraciones.
+- **2 · Tests:** `pytest` con cobertura contra un Postgres de servicio; sube `coverage.xml` y muestra el porcentaje en el resumen.
+- **3 · Seguridad:** `pip-audit` informa las vulnerabilidades conocidas de `requirements.txt` en el resumen del job (no bloquea el pipeline).
+- **4 · Imagen Docker:** construye la imagen del `Dockerfile`. En un pull request solo la valida; en push a `develop` o `main` la publica en GHCR (`ghcr.io/crhystel/delycattessen-backend`, tags `develop`, `latest` y el SHA).
+- **5 y 6 · Deploy:** usan los entornos `staging` y `production` de GitHub. En `production` conviene activar *Required reviewers* para exigir aprobación manual.
+
+El CI **no usa Secrets reales**: las variables de entorno de los tests son valores falsos escritos en el workflow.
+
+### Staging / semiproducción en una PC
+
+Cualquier PC con Docker puede correr la imagen que publicó el CI, sin instalar Python ni Postgres:
+
+```bash
+cp .env.staging.example .env.staging        # completa los valores (nunca se sube a git)
+docker compose -f docker-compose.staging.yml --env-file .env.staging pull
+docker compose -f docker-compose.staging.yml --env-file .env.staging up -d
+```
+
+`BACKEND_TAG=develop` (por defecto) usa la versión de `develop`; `latest` usa la de `main`. Para exponerlo con HTTPS sin pagar servidor: `cloudflared tunnel --url http://localhost:8000` y poner el dominio resultante en `ALLOWED_HOSTS` (y `HTTPS_ONLY=True`) de `.env.staging`. Usa solo claves de **sandbox** de Kushki y Payphone.
+
+### Despliegue automático por SSH (opcional)
+
+Si el staging está en un servidor, define en el entorno `staging` de GitHub (Settings > Environments) la variable `DEPLOY_HOST` y los secretos `DEPLOY_USER`, `DEPLOY_PATH` y `DEPLOY_SSH_KEY`. El job 5 entonces ejecuta `pull` y `up -d` por SSH. Sin esas variables el paso se omite y el despliegue es manual.
 
 ## Notas
 
