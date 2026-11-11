@@ -1,5 +1,6 @@
 from django.db import models
-from django.contrib.auth.models import AbstractUser
+from django.db.models.functions import Lower
+from django.contrib.auth.models import AbstractUser, UserManager
 from django.utils.translation import gettext_lazy as _
 from django.contrib.auth.hashers import check_password, make_password
 
@@ -12,8 +13,15 @@ class Institution(models.Model):
         return self.name
 
     class Meta:
-        verbose_name = _('institution')
-        verbose_name_plural = _('institutions')
+        verbose_name = _('institución')
+        verbose_name_plural = _('instituciones')
+
+
+class CustomUserManager(UserManager):
+    def create_superuser(self, username, email=None, password=None, **extra_fields):
+        # `createsuperuser` would otherwise leave the default role (STUDENT).
+        extra_fields.setdefault('role', 'ADMIN')
+        return super().create_superuser(username, email, password, **extra_fields)
 
 
 class CustomUser(AbstractUser):
@@ -52,13 +60,41 @@ class CustomUser(AbstractUser):
     )
     EMAIL_FIELD = 'email'
 
+    objects = CustomUserManager()
+
     def __str__(self) -> str:
         return self.username
 
+    class Meta(AbstractUser.Meta):
+        verbose_name = _('usuario')
+        verbose_name_plural = _('usuarios')
+        constraints = [
+            # The column is case-sensitive; this makes "A@x.com" and "a@x.com" the same
+            # address, which EmailBackend (email__iexact) needs to find a single user.
+            models.UniqueConstraint(
+                Lower('email'),
+                condition=models.Q(email__isnull=False),
+                name='users_customuser_email_ci_unique',
+            ),
+            # Keep in sync with CustomUser.Role (Meta cannot see the enclosing class).
+            models.CheckConstraint(
+                condition=models.Q(
+                    role__in=['PARENT', 'STUDENT', 'ADMIN', 'OPERATIONS_STAFF', 'TEACHER']
+                ),
+                name='users_customuser_role_valid',
+            ),
+            # A soft-deleted account can never be active again.
+            models.CheckConstraint(
+                condition=models.Q(deleted_at__isnull=True) | models.Q(is_active=False),
+                name='users_customuser_deleted_is_inactive',
+            ),
+        ]
+
 
 class ParentProfile(models.Model):
+    # PROTECT: deleting the account must never cascade into the children's wallets.
     user = models.OneToOneField(
-        CustomUser, verbose_name=_('user'), on_delete=models.CASCADE, related_name='parent_profile'
+        CustomUser, verbose_name=_('user'), on_delete=models.PROTECT, related_name='parent_profile'
     )
     payment_pin_hash = models.CharField(_('payment PIN hash'), max_length=128, blank=True)
 
@@ -77,12 +113,13 @@ class ParentProfile(models.Model):
         }
 
     class Meta:
-        verbose_name = _('parent profile')
-        verbose_name_plural = _('parent profiles')
+        verbose_name = _('perfil de padre')
+        verbose_name_plural = _('perfiles de padres')
 
 class StudentProfile(models.Model):
+    # PROTECT: the wallet, its transactions and the pre-orders hang from this profile.
     user = models.OneToOneField(
-        CustomUser, verbose_name=_('user'), on_delete=models.CASCADE, related_name='student_profile'
+        CustomUser, verbose_name=_('user'), on_delete=models.PROTECT, related_name='student_profile'
     )
     institution = models.ForeignKey(
         Institution, verbose_name=_('institution'), on_delete=models.PROTECT, related_name='students'
@@ -91,7 +128,7 @@ class StudentProfile(models.Model):
         _('profile picture'), upload_to='profiles/students/', blank=False, null=False
     )
     parent = models.ForeignKey(
-        ParentProfile, verbose_name=_('parent'), on_delete=models.CASCADE, related_name='children'
+        ParentProfile, verbose_name=_('parent'), on_delete=models.PROTECT, related_name='children'
     )
     allergies = models.ManyToManyField(
         'catalog.Allergen', verbose_name=_('allergies'), blank=True, related_name='students'
@@ -107,8 +144,8 @@ class StudentProfile(models.Model):
         super().save(*args, **kwargs)
 
     class Meta:
-        verbose_name = _('student profile')
-        verbose_name_plural = _('student profiles')
+        verbose_name = _('perfil de estudiante')
+        verbose_name_plural = _('perfiles de estudiantes')
 
 class ParentalControl(models.Model):
     student = models.OneToOneField(
@@ -128,8 +165,8 @@ class ParentalControl(models.Model):
         return f"Parental Control for {self.student.user.username}"
 
     class Meta:
-        verbose_name = _('parental control')
-        verbose_name_plural = _('parental controls')
+        verbose_name = _('control parental')
+        verbose_name_plural = _('controles parentales')
 
 
 class UserBiometric(models.Model):
@@ -149,5 +186,5 @@ class UserBiometric(models.Model):
         return f"Biometric profile for {self.user.username}"
 
     class Meta:
-        verbose_name = _('user biometric')
-        verbose_name_plural = _('user biometrics')
+        verbose_name = _('registro biométrico')
+        verbose_name_plural = _('registros biométricos')

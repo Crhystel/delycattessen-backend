@@ -10,7 +10,8 @@ class PreOrder(models.Model):
         DELIVERED = 'DELIVERED', _('Delivered')
         CANCELED = 'CANCELED', _('Canceled')
 
-    student = models.ForeignKey(StudentProfile, on_delete=models.CASCADE, related_name='pre_orders')
+    # PROTECT: pre-orders are part of the income history, never deleted with the student.
+    student = models.ForeignKey(StudentProfile, on_delete=models.PROTECT, related_name='pre_orders')
     daily_menu = models.ForeignKey(
         'catalog.DailyMenu',
         on_delete=models.PROTECT,
@@ -21,9 +22,12 @@ class PreOrder(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        verbose_name = _('pre-order')
-        verbose_name_plural = _('pre-orders')
-        indexes = [models.Index(fields=['created_at'])]
+        verbose_name = _('preorden')
+        verbose_name_plural = _('preórdenes')
+        indexes = [
+            models.Index(fields=['created_at']),
+            models.Index(fields=['status'], name='pos_preorder_status_idx'),
+        ]
 
     def __str__(self):
         return f'PreOrder {self.id} for {self.student.user.username}'
@@ -42,6 +46,13 @@ class PreOrderItem(models.Model):
     )
     quantity = models.PositiveIntegerField(default=1)
     price_at_purchase = models.DecimalField(_('price at purchase'), max_digits=6, decimal_places=2)
+
+    class Meta:
+        verbose_name = _('línea de preorden')
+        verbose_name_plural = _('líneas de preorden')
+        constraints = [
+            models.CheckConstraint(condition=models.Q(quantity__gte=1), name='pos_preorderitem_quantity_min_1'),
+        ]
 
     def __str__(self):
         return f'{self.quantity}x {self.dish.name}'
@@ -71,12 +82,13 @@ class Sale(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        verbose_name = _('sale')
-        verbose_name_plural = _('sales')
+        verbose_name = _('venta')
+        verbose_name_plural = _('ventas')
         ordering = ['-created_at']
         indexes = [
             models.Index(fields=['customer', 'created_at']),
             models.Index(fields=['institution', 'created_at']),
+            models.Index(fields=['payment_method'], name='pos_sale_payment_method_idx'),
         ]
         constraints = [
             models.CheckConstraint(
@@ -95,6 +107,13 @@ class SaleItem(models.Model):
     quantity = models.PositiveIntegerField()
     price_at_purchase = models.DecimalField(_('price at purchase'), max_digits=6, decimal_places=2)
 
+    class Meta:
+        verbose_name = _('línea de venta')
+        verbose_name_plural = _('líneas de venta')
+        constraints = [
+            models.CheckConstraint(condition=models.Q(quantity__gte=1), name='pos_saleitem_quantity_min_1'),
+        ]
+
     def __str__(self):
         return f'{self.quantity}x {self.menu_item.name}'
 
@@ -109,6 +128,13 @@ class SaleCombo(models.Model):
     name = models.CharField(_('name'), max_length=200)
     quantity = models.PositiveIntegerField()
     price_at_purchase = models.DecimalField(_('price at purchase'), max_digits=6, decimal_places=2)
+
+    class Meta:
+        verbose_name = _('combo vendido')
+        verbose_name_plural = _('combos vendidos')
+        constraints = [
+            models.CheckConstraint(condition=models.Q(quantity__gte=1), name='pos_salecombo_quantity_min_1'),
+        ]
 
     def __str__(self):
         return f'{self.quantity}x {self.name}'
@@ -150,8 +176,8 @@ class ReportExport(models.Model):
     finished_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
-        verbose_name = _('report export')
-        verbose_name_plural = _('report exports')
+        verbose_name = _('reporte exportado')
+        verbose_name_plural = _('reportes exportados')
         indexes = [models.Index(fields=['requested_by', 'status'])]
 
     def __str__(self):
@@ -186,8 +212,8 @@ class CreditStatement(models.Model):
     sent_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
-        verbose_name = _('credit statement')
-        verbose_name_plural = _('credit statements')
+        verbose_name = _('estado de cuenta')
+        verbose_name_plural = _('estados de cuenta')
         constraints = [
             models.UniqueConstraint(fields=['teacher', 'institution', 'month'], name='unique_credit_statement'),
         ]

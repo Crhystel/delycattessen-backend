@@ -22,6 +22,7 @@ Roles (`users.CustomUser.Role`): `ADMIN`, `OPERATIONS_STAFF`, `TEACHER`, `PARENT
 | Redis (opcional, `REDIS_URL`) | Caché compartida: códigos de reset y nonces de QR |
 | Kushki / Payphone | Pasarelas de pago para recargas |
 | OpenCV (YuNet + SFace) + AES-256-GCM | Biometría facial; solo se guarda el vector cifrado |
+| whitenoise · django-axes | Estáticos del admin con gunicorn · bloqueo del login del admin tras varios intentos fallidos |
 | pytest + pytest-django + xdist | Tests |
 
 Toda la configuración sale de variables de entorno (`python-decouple`); la plantilla es `.env.example`.
@@ -129,6 +130,15 @@ Variables en `.env.example`, agrupadas en seguridad, entorno, base de datos, ser
 - `pos.tasks.build_teacher_credit_export_task` (Excel o PDF del reporte de crédito docente), `send_credit_statement_email` (estado de cuenta mensual de un docente)
 
 Worker local: `run_celery.bat`. Redis y RabbitMQ locales: `docker compose up -d`.
+
+## 8.1 Superadmin (admin de Django)
+
+`/admin/` es el panel técnico del superusuario (`createsuperuser` crea `role=ADMIN`; entra con el **usuario**, no con el correo). No sustituye al panel web: el día a día del negocio pasa por la API.
+
+- **Sitio propio** (`core/admin_site.py`, activado con `delycattessen_backend/apps.py`): agrupa los modelos en *Personas y cuentas*, *Billetera y ventas*, *Catálogo y menús* y *Seguridad y sistema*, con nombres en español (`verbose_name` de los modelos). Oculta tablas internas (grupos, resultados de Celery, listas de tokens, bitácoras de axes) y deshabilita la acción masiva "eliminar seleccionados".
+- **Mixins** (`core/admin_mixins.py`): `NoDeleteAdminMixin`, `ReadOnlyAdminMixin` y `ReadOnlyInlineMixin`. `wallet`, `pos` y `catalog` son de solo lectura (sus invariantes viven en `services.py`); en `users` los perfiles y la biometría también (los datos sensibles son del dueño y el vector biométrico nunca se muestra).
+- **Cuentas** (`users/admin.py`): el alta solo crea administrador, docente u operativo por `create_staff_account` (contraseña temporal, `must_change_password` y correo); rol y usuario no se editan; una cuenta dada de baja es de solo lectura. Acciones: activar, desactivar (revoca los refresh tokens), dar de baja (`soft_delete_account`, con la misma política que `CanManageStaffAccount`) y restablecer la contraseña temporal. Filtro "perfil faltante" para detectar cuentas a medio crear.
+- **Integridad en la base** (migraciones `users 0012`, `wallet 0004`, `pos 0012`, `catalog 0013`): `on_delete=PROTECT` en `ParentProfile.user`, `StudentProfile.user/parent`, `Wallet.student`, `Transaction.wallet` y `PreOrder.student` (un borrado nunca arrastra saldos ni historial); `CheckConstraint` de saldo, montos, cantidades, stock/precio y fechas de vigencia; correo único sin distinguir mayúsculas; referencia de pasarela única; rol válido y "dada de baja ⇒ inactiva"; índices de analítica. Es protección del ORM: no frena un `DELETE` escrito a mano en SQL.
 
 ## 9. Tests y CI
 

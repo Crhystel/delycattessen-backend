@@ -10,8 +10,8 @@ class Allergen(models.Model):
     description = models.TextField(_('description'), blank=True)
 
     class Meta:
-        verbose_name = _('allergen')
-        verbose_name_plural = _('allergens')
+        verbose_name = _('alérgeno')
+        verbose_name_plural = _('alérgenos')
 
     def __str__(self):
         return self.name
@@ -33,8 +33,8 @@ class Ingredient(models.Model):
     )
 
     class Meta:
-        verbose_name = _('ingredient')
-        verbose_name_plural = _('ingredients')
+        verbose_name = _('ingrediente')
+        verbose_name_plural = _('ingredientes')
 
     def __str__(self):
         return self.name
@@ -58,8 +58,12 @@ class MenuItem(models.Model):
     allergens = models.ManyToManyField(Allergen, blank=True, related_name='menu_items')
 
     class Meta:
-        verbose_name = _('menu item')
-        verbose_name_plural = _('menu items')
+        verbose_name = _('producto')
+        verbose_name_plural = _('productos')
+        constraints = [
+            models.CheckConstraint(condition=models.Q(stock__gte=0), name='catalog_menuitem_stock_not_negative'),
+            models.CheckConstraint(condition=models.Q(price__gt=0), name='catalog_menuitem_price_positive'),
+        ]
 
     def save(self, *args, **kwargs):
         self.is_visible = self.stock > 0
@@ -104,8 +108,8 @@ class MenuDish(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        verbose_name = _('menu dish')
-        verbose_name_plural = _('menu dishes')
+        verbose_name = _('platillo')
+        verbose_name_plural = _('platillos')
 
     def save(self, *args, **kwargs):
         if self.image:
@@ -156,8 +160,8 @@ class MonthlyMenu(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        verbose_name = _('monthly menu')
-        verbose_name_plural = _('monthly menus')
+        verbose_name = _('menú mensual')
+        verbose_name_plural = _('menús mensuales')
         constraints = [
             models.UniqueConstraint(
                 fields=['institution', 'year', 'month'],
@@ -183,8 +187,8 @@ class DailyMenu(models.Model):
     dishes = models.ManyToManyField(MenuDish, blank=True, related_name='daily_menus')
 
     class Meta:
-        verbose_name = _('daily menu')
-        verbose_name_plural = _('daily menus')
+        verbose_name = _('menú diario')
+        verbose_name_plural = _('menús diarios')
         ordering = ['date']
         constraints = [
             models.UniqueConstraint(
@@ -262,9 +266,15 @@ class Promotion(ValidityPeriod):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        verbose_name = _('promotion')
-        verbose_name_plural = _('promotions')
+        verbose_name = _('descuento')
+        verbose_name_plural = _('descuentos')
         ordering = ['-start_date', '-id']
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(end_date__gte=models.F('start_date')),
+                name='catalog_promotion_end_after_start',
+            ),
+        ]
 
     def save(self, *args, **kwargs):
         if self.image:
@@ -311,6 +321,12 @@ class Combo(ValidityPeriod):
         verbose_name = _('combo')
         verbose_name_plural = _('combos')
         ordering = ['-start_date', '-id']
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(end_date__gte=models.F('start_date')),
+                name='catalog_combo_end_after_start',
+            ),
+        ]
 
     def save(self, *args, **kwargs):
         if self.image:
@@ -337,10 +353,11 @@ class ComboItem(models.Model):
     quantity = models.PositiveSmallIntegerField(_('quantity'), default=1, validators=[MinValueValidator(1)])
 
     class Meta:
-        verbose_name = _('combo item')
-        verbose_name_plural = _('combo items')
+        verbose_name = _('producto del combo')
+        verbose_name_plural = _('productos del combo')
         constraints = [
             models.UniqueConstraint(fields=['combo', 'menu_item'], name='unique_product_per_combo'),
+            models.CheckConstraint(condition=models.Q(quantity__gte=1), name='catalog_comboitem_quantity_min_1'),
         ]
 
     def __str__(self):

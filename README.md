@@ -130,6 +130,8 @@ python manage.py migrate
 
 ### 8. Crear un superusuario (opcional, para acceder al panel admin de Django)
 
+El superusuario entra al admin con su **nombre de usuario** (no con el correo) y se crea con rol `ADMIN`. Para cambiar su contraseña: `python manage.py changepassword <usuario>`. Más abajo, la sección "Panel superadmin".
+
 ```bash
 python manage.py createsuperuser
 ```
@@ -177,6 +179,16 @@ processors=2
 y reinicia WSL con `wsl --shutdown`. Si el equipo no da, usa el flujo sin Docker de los pasos 5 a 9.
 
 Comandos útiles: `docker compose logs -f api worker` (ver logs) y `docker compose --profile full down` (detener; los datos de Postgres se conservan en un volumen).
+
+## Panel superadmin (`/admin/`)
+
+Panel técnico de Django para el superusuario, agrupado por funcionalidad: **Personas y cuentas**, **Billetera y ventas**, **Catálogo y menús** y **Seguridad y sistema**.
+
+- **Personas y cuentas** es lo editable: usuarios, instituciones y el acceso de cada cuenta. Las cuentas de personal (administrador, docente y operativo) se crean aquí con contraseña temporal por correo; los padres y estudiantes se registran desde la app (que crea su perfil y su billetera).
+- **Billetera, ventas y catálogo** son de **solo lectura**: sus saldos, totales y alérgenos los mantiene la API, y el catálogo se edita desde el panel web.
+- **Nada se borra desde el admin.** En su lugar hay acciones: activar, desactivar (cierra las sesiones), dar de baja al personal (eliminación lógica) y restablecer la contraseña temporal. La base de datos además protege el historial: no deja eliminar usuarios, perfiles ni billeteras con movimientos.
+- El login del admin se bloquea tras varios intentos fallidos (`AXES_FAILURE_LIMIT`, `AXES_COOLOFF_HOURS`); para desbloquear, abre *Seguridad y sistema → Intentos de acceso* y elimina el registro. La ruta (`ADMIN_URL`), la duración de la sesión y los orígenes CSRF se configuran en el `.env` (ver `.env.example`).
+- Con gunicorn (staging) el CSS del admin lo sirve whitenoise; `collectstatic` se ejecuta al construir la imagen.
 
 ## Pipeline CI/CD
 
