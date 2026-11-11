@@ -287,7 +287,7 @@ class ParentSaleListView(generics.ListAPIView):
     def get_queryset(self):
         queryset = Sale.objects.filter(
             customer__student_profile__parent=self.request.user.parent_profile,
-        ).select_related('customer__student_profile').prefetch_related('items__menu_item', 'combos')
+        ).select_related('customer__student_profile').prefetch_related('items__menu_item', 'combos__combo')
 
         student_id = self.request.query_params.get('student_id')
         if student_id:

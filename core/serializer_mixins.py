@@ -9,6 +9,8 @@ class LineSummaryMixin(serializers.Serializer):
     Mixin Pattern: adds `display_name`, `time` and `items` to any serializer of
     a purchase made of product lines. Subclasses only implement get_lines(obj),
     returning (name, quantity, price) tuples, and list the three fields in Meta.
+    A line may carry a fourth element, the product's image field: the item then
+    also gets an absolute `image` URL (null if it has none).
     Meant to be combined with a ModelSerializer that has a `created_at` field.
     """
     empty_display_name = _('Consumo')
@@ -33,7 +35,17 @@ class LineSummaryMixin(serializers.Serializer):
         return local_time.strftime('%I:%M %p').lstrip('0').lower()
 
     def get_items(self, obj):
-        return [
-            {'menu_item_name': name, 'quantity': quantity, 'price_at_purchase': str(price)}
-            for name, quantity, price in self.get_lines(obj)
-        ]
+        items = []
+        for name, quantity, price, *image in self.get_lines(obj):
+            item = {'menu_item_name': name, 'quantity': quantity, 'price_at_purchase': str(price)}
+            if image:
+                item['image'] = absolute_image_url(image[0], self.context.get('request'))
+            items.append(item)
+        return items
+
+
+def absolute_image_url(image, request=None):
+    """Absolute URL of an ImageField value, or None when it has no file."""
+    if not image:
+        return None
+    return request.build_absolute_uri(image.url) if request else image.url
