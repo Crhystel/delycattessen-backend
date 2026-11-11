@@ -1,7 +1,6 @@
 import calendar
 import logging
 from datetime import date
-from decimal import Decimal, ROUND_HALF_UP
 from functools import partial
 from typing import Iterable, Sequence
 from kombu.exceptions import OperationalError
@@ -12,7 +11,7 @@ from rest_framework.exceptions import ValidationError
 
 from core.timezone import local_today
 
-from .models import Allergen, Combo, ComboItem, MonthlyMenu, DailyMenu, MenuDish, MenuItem, Promotion
+from .models import Allergen, Combo, ComboItem, MonthlyMenu, DailyMenu, MenuDish, MenuItem
 from .tasks import send_monthly_menu_published_email
 
 logger = logging.getLogger(__name__)
@@ -136,67 +135,6 @@ class MonthlyMenuService:
         return monthly_menu
 
 
-class PromotionService:
-    """
-    Service Layer Pattern: single place that decides which discount applies
-    to a product today, so the catalog, the admin panel and the POS charge
-    the same price. Promotion validity is evaluated on Ecuador's local date.
-    """
-
-    @staticmethod
-    def today() -> date:
-        return local_today()
-
-    @staticmethod
-    def discounted_price(price: Decimal, discount_percentage: int | None) -> Decimal:
-        if not discount_percentage:
-            return price
-        factor = (Decimal(100) - Decimal(discount_percentage)) / Decimal(100)
-        return (price * factor).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-
-    @classmethod
-    def active_discounts(cls, item_ids: Iterable[int], on_date: date | None = None) -> dict[int, int]:
-        """Maps each product id with a promotion in force to its discount."""
-        rows = Promotion.products.through.objects.filter(
-            menuitem_id__in=list(item_ids),
-            promotion__in=Promotion.objects.in_force(on_date or cls.today()),
-        ).values_list('menuitem_id', 'promotion__discount_percentage')
-        return dict(rows)
-
-    @classmethod
-    def unit_prices(cls, items: Sequence[MenuItem]) -> dict[int, Decimal]:
-        """Price to charge per product id, with today's discount applied."""
-        discounts = cls.active_discounts(item.id for item in items)
-        return {item.id: cls.discounted_price(item.price, discounts.get(item.id)) for item in items}
-
-    @staticmethod
-    def validate_products_available(products, start_date: date, end_date: date, exclude_id=None) -> None:
-        """
-        A product cannot be in two promotions whose periods overlap, so it
-        never has two active promotions at the same time.
-        """
-        overlapping = Promotion.objects.filter(
-            products__in=products,
-            start_date__lte=end_date,
-            end_date__gte=start_date,
-        )
-        if exclude_id is not None:
-            overlapping = overlapping.exclude(pk=exclude_id)
-        names = sorted(set(
-            MenuItem.objects.filter(
-                pk__in=[product.pk for product in products],
-                promotions__in=overlapping,
-            ).values_list('name', flat=True)
-        ))
-        if names:
-            raise ValidationError({
-                'products': _(
-                    'Estos productos ya tienen una promoción en esas fechas: %(names)s. '
-                    'Espera a que venza o elige otras fechas.'
-                ) % {'names': ', '.join(names)}
-            })
-
-
 class ComboService:
     """
     Service Layer Pattern: combos in force and their contents, shared by the
@@ -211,6 +149,40 @@ class ComboService:
     def in_force(cls, queryset=None):
         queryset = Combo.objects.all() if queryset is None else queryset
         return queryset.in_force(cls.today()).prefetch_related('items__menu_item')
+
+    @staticmethod
+    def available_units(combo: Combo) -> int:
+        """How many units of `combo` can be sold with the stock of its products:
+        the minimum of floor(stock / quantity) over its items. A combo without
+        products or with an inactive product has none."""
+        units = [
+            item.menu_item.stock // item.quantity if item.menu_item.is_active else 0
+            for item in combo.items.all()
+        ]
+        return min(units, default=0)
+
+    @staticmethod
+    def short_items(pairs: Iterable[tuple[MenuItem, int]]) -> list[tuple[MenuItem, int]]:
+        """(product, quantity) pairs whose product cannot cover one unit of the
+        combo: stock below the quantity the combo needs."""
+        return [(product, quantity) for product, quantity in pairs if product.stock < quantity]
+
+    @classmethod
+    def validate_stock(cls, pairs: Sequence[tuple[MenuItem, int]], current: dict[int, int] | None = None) -> None:
+        """Rejects a combo whose products lack stock for one unit. `current` maps
+        product id -> quantity the combo already has (when editing): only new
+        products or a larger quantity are checked, so an existing combo can still
+        be renamed or repriced after one of its products ran out."""
+        current = current or {}
+        to_check = [(product, quantity) for product, quantity in pairs if quantity > current.get(product.id, 0)]
+        short = cls.short_items(to_check)
+        if short:
+            detail = ', '.join(
+                _('"%(name)s" (disponibles %(stock)s, el combo necesita %(needed)s)')
+                % {'name': product.name, 'stock': product.stock, 'needed': quantity}
+                for product, quantity in short
+            )
+            raise ValidationError(_('Sin stock suficiente para el combo: %(detail)s.') % {'detail': detail})
 
     @classmethod
     def combos_for_sale(cls, institution, combo_lines) -> list[tuple[Combo, int]]:

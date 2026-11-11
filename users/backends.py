@@ -12,7 +12,9 @@ class EmailBackend(ModelBackend):
             return None
         try:
             user = User.objects.get(email__iexact=username)
-        except User.DoesNotExist:
+        except (User.DoesNotExist, User.MultipleObjectsReturned):
+            # The unique index on Lower(email) makes the second case impossible; it is
+            # still treated as "not found" so it can never turn into a 500 at login.
             return None
         if user.check_password(password) and self.user_can_authenticate(user):
             return user

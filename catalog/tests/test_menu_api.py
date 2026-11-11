@@ -425,3 +425,33 @@ class ImageResizingTests(APITestCase):
             self.assertLessEqual(max(w, h), 1024)
             self.assertEqual(saved_img.format, 'JPEG')
 
+
+class NoDiscountsTests(APITestCase):
+    """Discounts were removed: only combos remain as offers, and the product
+    keeps a single price."""
+
+    def setUp(self):
+        self.institution = Institution.objects.create(name="Colegio Americano")
+        self.admin = CustomUser.objects.create_user(
+            username="admin_nd", email="admin_nd@delycattessen.com",
+            password="testpassword123", role=CustomUser.Role.ADMIN,
+            institution=self.institution,
+        )
+        MenuItem.objects.create(
+            institution=self.institution, name="Sandwich", category="Comida",
+            price=Decimal("2.50"), stock=5,
+        )
+        token = RefreshToken.for_user(self.admin).access_token
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+    def test_menu_has_no_discount_fields(self):
+        for url in ('/api/catalog/menu/', '/api/catalog/menu/admin/'):
+            response = self.client.get(url)
+            self.assertEqual(response.status_code, status.HTTP_200_OK, url)
+            self.assertEqual(response.data[0]['price'], '2.50')
+            self.assertNotIn('discount_percentage', response.data[0])
+            self.assertNotIn('final_price', response.data[0])
+
+    def test_promotions_endpoints_no_longer_exist(self):
+        for url in ('/api/catalog/promotions/', '/api/catalog/promotions/active/', '/api/catalog/promotions/1/'):
+            self.assertEqual(self.client.get(url).status_code, status.HTTP_404_NOT_FOUND, url)

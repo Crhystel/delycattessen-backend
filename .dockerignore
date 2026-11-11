@@ -21,6 +21,9 @@ htmlcov
 media
 models
 
+# collectstatic los genera al construir la imagen.
+staticfiles
+
 *.md
 AGENTS.md
 CLAUDE.md

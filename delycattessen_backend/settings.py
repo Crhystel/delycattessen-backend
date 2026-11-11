@@ -39,7 +39,7 @@ ALLOWED_HOSTS = [
 # Application definition
 
 INSTALLED_APPS = [
-    'django.contrib.admin',
+    'delycattessen_backend.apps.DelycattessenAdminConfig',  # django.contrib.admin with our AdminSite
     'django.contrib.auth',
     'django.contrib.contenttypes',
     'django.contrib.sessions',
@@ -55,17 +55,21 @@ INSTALLED_APPS = [
     'core',
     'corsheaders',
     'django_celery_results',
+    'axes',
 ]
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    # Serves the static files (the admin's CSS and JS) when running behind gunicorn.
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'axes.middleware.AxesMiddleware',  # must stay last
 ]
 CORS_ALLOW_ALL_ORIGINS = config('CORS_ALLOW_ALL_ORIGINS', default=False, cast=bool)
 CORS_ALLOWED_ORIGINS = [
@@ -138,6 +142,18 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = 'static/'
+# `collectstatic` target; whitenoise serves it. Not versioned (see .gitignore).
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+try:
+    STATIC_ROOT.mkdir(exist_ok=True)  # WhiteNoise warns while the directory does not exist
+except OSError:
+    pass
+STORAGES = {
+    'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+    # Compressed but without a manifest, so pages render before `collectstatic` (tests, dev).
+    'staticfiles': {'BACKEND': 'whitenoise.storage.CompressedStaticFilesStorage'},
+}
+WHITENOISE_USE_FINDERS = DEBUG
 
 # Custom User Model
 AUTH_USER_MODEL = 'users.CustomUser'
@@ -156,16 +172,41 @@ REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_RATES': {
         # Attempts per user to change the password (guessing the current one).
         'change_password': config('CHANGE_PASSWORD_THROTTLE_RATE', default='5/hour'),
+        # Attempts per parent to change a child's password (guessing the parent's own).
+        'child_account': config('CHILD_ACCOUNT_THROTTLE_RATE', default='10/hour'),
     },
 }
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(hours=1),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=15),
+    # Records `last_login` on every API login: "last access" in the superadmin and its alerts.
+    'UPDATE_LAST_LOGIN': True,
 }
 AUTHENTICATION_BACKENDS = [
+    'axes.backends.AxesStandaloneBackend',  # lockout after repeated failures (admin login)
     'users.backends.EmailBackend',
     'django.contrib.auth.backends.ModelBackend',
 ]
+
+# Brute-force protection of the Django admin login. The API keeps its own flow
+# (JWT), so only the admin site is locked.
+AXES_ENABLED = config('AXES_ENABLED', default=True, cast=bool)
+AXES_ONLY_ADMIN_SITE = True
+AXES_FAILURE_LIMIT = config('AXES_FAILURE_LIMIT', default=5, cast=int)
+AXES_COOLOFF_TIME = timedelta(hours=config('AXES_COOLOFF_HOURS', default=1, cast=int))
+AXES_LOCKOUT_PARAMETERS = [['username', 'ip_address']]
+AXES_RESET_ON_SUCCESS = True
+
+# The admin is the only user of Django sessions (the API uses JWT): keep them short.
+SESSION_COOKIE_AGE = config('SESSION_COOKIE_AGE', default=28800, cast=int)
+# Origins allowed to submit forms over HTTPS, e.g. the tunnel or proxy domain of staging.
+CSRF_TRUSTED_ORIGINS = [
+    origin.strip()
+    for origin in config('CSRF_TRUSTED_ORIGINS', default='').split(',')
+    if origin.strip()
+]
+# Path of the Django admin; change it in production to make it harder to find.
+ADMIN_URL = config('ADMIN_URL', default='admin/')
 # Celery / RabbitMQ configuration
 # Required: no default so no broker credentials live in the code.
 CELERY_BROKER_URL = config('RABBITMQ_URL')

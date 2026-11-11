@@ -16,8 +16,9 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from core.biometrics import BiometricValidationMixin
 
-from .models import CustomUser, StudentProfile, UserBiometric
-from .tasks import send_staff_credentials_email
+from .audit import display_name, record_audit
+from .models import AuditLog, CustomUser, StudentProfile, UserBiometric
+from .tasks import send_child_password_changed_email, send_staff_credentials_email
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +94,8 @@ def create_staff_account(validated_data, admin, target_institution=None):
     data = dict(validated_data)
     data.pop('is_active', None)
     institution = data.pop('institution', None) or target_institution or admin.institution
+    if institution is not None and not institution.is_active:
+        raise ValidationError({'institution': _('Esta institución está suspendida: no admite cuentas nuevas.')})
     temporary_password = generate_temporary_password()
     user = CustomUser.objects.create_user(
         username=data['email'],
@@ -122,6 +125,41 @@ def notify_staff_credentials(user, temporary_password):
         logger.exception('Could not enqueue the credentials email for staff account %s', user.pk)
         return False
     return True
+
+
+def notify_child_password_changed(student):
+    """Enqueues the notice to the parent's e-mail after their child's password
+    changed. Best effort: the change is already committed, so an unreachable
+    broker or a parent without e-mail must not turn it into an error. The notice
+    never carries the password."""
+    parent = student.parent.user
+    if not parent.email:
+        return False
+    try:
+        send_child_password_changed_email.delay(
+            parent.email, parent.first_name, display_name(student.user), student.user.username,
+        )
+    except (OperationalError, OSError):
+        logger.exception('Could not enqueue the password change notice for student %s', student.pk)
+        return False
+    return True
+
+
+@transaction.atomic
+def change_child_password(student, new_password, parent, request=None):
+    """The parent sets a new password for their child: the child's sessions are
+    closed (the parent keeps theirs), the change is audited and the parent gets an
+    e-mail notice once the change is committed."""
+    child = student.user
+    child.set_password(new_password)
+    child.must_change_password = False
+    child.save(update_fields=['password', 'must_change_password'])
+    revoke_user_tokens(child)
+    record_audit(
+        AuditLog.Action.PASSWORD_CHANGED, actor=parent, target=child, request=request,
+        source=AuditLog.Source.API, detail={'changed_by': 'parent'},
+    )
+    transaction.on_commit(lambda: notify_child_password_changed(student))
 
 
 def extract_embedding(photo):

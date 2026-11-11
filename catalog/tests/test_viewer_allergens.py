@@ -7,7 +7,7 @@ from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from catalog.mixins import ViewerAllergenContextMixin
-from catalog.models import Allergen, Combo, ComboItem, DailyMenu, Ingredient, MenuDish, MenuItem, MonthlyMenu, Promotion
+from catalog.models import Allergen, Combo, ComboItem, DailyMenu, Ingredient, MenuDish, MenuItem, MonthlyMenu
 from core.timezone import local_today
 from users.models import CustomUser, Institution, ParentProfile, StudentProfile
 
@@ -16,7 +16,6 @@ GIF = (
     b'\x01\x00\x00\x00\x00\x2c\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x44\x01\x00\x3b'
 )
 MENU = '/api/catalog/menu/'
-ACTIVE_PROMOTIONS = '/api/catalog/promotions/active/'
 ACTIVE_COMBOS = '/api/catalog/combos/active/'
 
 
@@ -127,43 +126,12 @@ class ViewerAllergenTests(APITestCase):
         self._auth(self.student_user)
         row = self._by_name(self.client.get(MENU).data)['Pan']
         self.assertEqual(
-            {k: row[k] for k in ('id', 'name', 'price', 'stock', 'discount_percentage', 'final_price')},
-            {'id': self.bread.id, 'name': 'Pan', 'price': '2.00', 'stock': 10,
-             'discount_percentage': None, 'final_price': '2.00'},
+            {k: row[k] for k in ('id', 'name', 'price', 'stock')},
+            {'id': self.bread.id, 'name': 'Pan', 'price': '2.00', 'stock': 10},
         )
         self.assertEqual({a['name'] for a in row['allergens']}, {'Gluten viewer', 'Soya viewer'})
         self.assertEqual(set(row['allergens'][0]), {'id', 'name', 'description'})
         self.assertEqual([i['name'] for i in row['ingredients']], ['Base viewer'])
-
-    # ---- promotions ----------------------------------------------------------
-    def _promotion(self):
-        today = local_today()
-        promotion = Promotion.objects.create(
-            institution=self.institution, discount_percentage=20,
-            start_date=today, end_date=today + timedelta(days=5))
-        promotion.products.set([self.bread, self.juice])
-        return promotion
-
-    def test_active_promotions_mark_the_viewer_conflicts(self):
-        self._promotion()
-        self._auth(self.student_user)
-        response = self.client.get(ACTIVE_PROMOTIONS)
-        self.assertEqual(response.status_code, 200)
-        products = {p['name']: p for p in response.data[0]['products']}
-        self.assertEqual(products['Pan']['conflicting_allergens'], ['Gluten viewer'])
-        self.assertTrue(products['Pan']['has_viewer_allergens'])
-        self.assertEqual({a['name'] for a in products['Pan']['allergens']}, {'Gluten viewer', 'Soya viewer'})
-        self.assertEqual(products['Jugo']['conflicting_allergens'], [])
-        self.assertEqual(response.data[0]['discount_percentage'], 20)
-
-    def test_active_promotions_are_unmarked_for_staff_and_for_a_strangers_child(self):
-        self._promotion()
-        self._auth(self.staff)
-        for product in self.client.get(ACTIVE_PROMOTIONS).data[0]['products']:
-            self.assertEqual(product['conflicting_allergens'], [])
-            self.assertFalse(product['has_viewer_allergens'])
-        self._auth(self.parent_user)
-        self.assertEqual(self.client.get(ACTIVE_PROMOTIONS, {'student_id': self.stranger.id}).status_code, 403)
 
     # ---- combos --------------------------------------------------------------
     def _combo(self):

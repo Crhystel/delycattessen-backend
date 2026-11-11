@@ -24,6 +24,12 @@ RUN sed -i 's/\r$//' docker/entrypoint.sh \
     && mkdir -p /app/models /app/media \
     && chown -R app:app /app/models /app/media
 
+# Reúne los estáticos del admin (los sirve whitenoise con gunicorn). Las variables son
+# ficticias: settings las exige para cargar, pero collectstatic no se conecta a nada.
+RUN SECRET_KEY=build-only DB_NAME=x DB_USER=x DB_PASSWORD=x DB_HOST=localhost DB_PORT=5432 \
+    RABBITMQ_URL=memory:// EMAIL_HOST_USER=build@example.com EMAIL_HOST_PASSWORD=x \
+    python manage.py collectstatic --noinput
+
 USER app
 
 EXPOSE 8000

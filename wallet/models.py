@@ -6,9 +6,10 @@ from users.models import StudentProfile
 
 
 class Wallet(models.Model):
+    # PROTECT: a wallet (balance and history) is never removed together with its owner.
     student = models.OneToOneField(
         StudentProfile,
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name='wallet',
     )
     balance = models.DecimalField(
@@ -24,6 +25,14 @@ class Wallet(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = _('billetera')
+        verbose_name_plural = _('billeteras')
+        constraints = [
+            # The validator only runs in forms and serializers; F() updates skip it.
+            models.CheckConstraint(condition=models.Q(balance__gte=0), name='wallet_balance_not_negative'),
+        ]
 
     def __str__(self):
         return f'Wallet({self.student_id}) - {self.balance}'
@@ -45,7 +54,7 @@ class Transaction(models.Model):
 
     wallet = models.ForeignKey(
         Wallet,
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name='transactions',
     )
     amount = models.DecimalField(
@@ -92,6 +101,21 @@ class Transaction(models.Model):
 
     class Meta:
         ordering = ['-created_at']
+        verbose_name = _('transacción')
+        verbose_name_plural = _('transacciones')
+        indexes = [
+            models.Index(fields=['wallet', 'created_at'], name='wallet_tx_wallet_created_idx'),
+            models.Index(fields=['status', 'type'], name='wallet_tx_status_type_idx'),
+        ]
+        constraints = [
+            models.CheckConstraint(condition=models.Q(amount__gt=0), name='wallet_transaction_amount_positive'),
+            # The gateway webhooks look a transaction up by its external id.
+            models.UniqueConstraint(
+                fields=['gateway', 'external_transaction_id'],
+                condition=~models.Q(external_transaction_id=''),
+                name='wallet_transaction_external_id_unique',
+            ),
+        ]
 
     def __str__(self):
         return f'{self.type} - {self.amount} ({self.status})'

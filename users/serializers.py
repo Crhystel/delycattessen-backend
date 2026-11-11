@@ -28,7 +28,7 @@ class CreateStaffSerializer(UppercaseNamesMixin, serializers.ModelSerializer):
         choices=[(User.Role.TEACHER, _('Docente')), (User.Role.OPERATIONS_STAFF, _('Personal Operativo'))]
     )
     institution_id = serializers.PrimaryKeyRelatedField(
-        queryset=Institution.objects.all(), source='institution', write_only=True, required=False
+        queryset=Institution.objects.filter(is_active=True), source='institution', write_only=True, required=False
     )
     institution_name = serializers.CharField(source='institution.name', read_only=True)
 
@@ -135,7 +135,7 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
 class InstitutionSerializer(serializers.ModelSerializer):
     class Meta:
         model = Institution
-        fields = ('id', 'name')
+        fields = ('id', 'name', 'is_active')
 
 
 class MeSerializer(serializers.ModelSerializer):
@@ -207,7 +207,7 @@ class StudentRegistrationSerializer(UppercaseNamesMixin,serializers.Serializer):
     first_last_name = serializers.CharField(max_length=150)
     second_last_name = serializers.CharField(max_length=150, required=False, allow_blank=True)
     institution_id = serializers.PrimaryKeyRelatedField(
-        queryset=Institution.objects.all(), source='institution',
+        queryset=Institution.objects.filter(is_active=True), source='institution',
     )
     username = serializers.CharField(max_length=150)
     password = PasswordField()
@@ -356,6 +356,25 @@ class ParentalControlSerializer(serializers.ModelSerializer):
         if value < 0:
             raise serializers.ValidationError(_('El monto del aviso de saldo bajo no puede ser negativo.'))
         return value
+
+
+class ChildPasswordChangeSerializer(serializers.Serializer):
+    """The parent sets their child's password. The parent confirms with their OWN
+    password: they do not know the child's current one. A wrong confirmation is a
+    400 (never a 401, which would make the app sign the parent out)."""
+    parent_password = serializers.CharField(write_only=True, trim_whitespace=False)
+    new_password = PasswordField()
+    confirm_password = serializers.CharField(write_only=True, trim_whitespace=False)
+
+    def validate_parent_password(self, value):
+        if not self.context['request'].user.check_password(value):
+            raise serializers.ValidationError(_('Tu contraseña es incorrecta.'))
+        return value
+
+    def validate(self, attrs):
+        if attrs['new_password'] != attrs['confirm_password']:
+            raise serializers.ValidationError({'confirm_password': _('Las contraseñas no coinciden.')})
+        return attrs
 
 
 class ChangePasswordSerializer(serializers.Serializer):

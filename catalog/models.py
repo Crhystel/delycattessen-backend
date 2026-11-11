@@ -10,8 +10,8 @@ class Allergen(models.Model):
     description = models.TextField(_('description'), blank=True)
 
     class Meta:
-        verbose_name = _('allergen')
-        verbose_name_plural = _('allergens')
+        verbose_name = _('alérgeno')
+        verbose_name_plural = _('alérgenos')
 
     def __str__(self):
         return self.name
@@ -33,8 +33,8 @@ class Ingredient(models.Model):
     )
 
     class Meta:
-        verbose_name = _('ingredient')
-        verbose_name_plural = _('ingredients')
+        verbose_name = _('ingrediente')
+        verbose_name_plural = _('ingredientes')
 
     def __str__(self):
         return self.name
@@ -58,8 +58,12 @@ class MenuItem(models.Model):
     allergens = models.ManyToManyField(Allergen, blank=True, related_name='menu_items')
 
     class Meta:
-        verbose_name = _('menu item')
-        verbose_name_plural = _('menu items')
+        verbose_name = _('producto')
+        verbose_name_plural = _('productos')
+        constraints = [
+            models.CheckConstraint(condition=models.Q(stock__gte=0), name='catalog_menuitem_stock_not_negative'),
+            models.CheckConstraint(condition=models.Q(price__gt=0), name='catalog_menuitem_price_positive'),
+        ]
 
     def save(self, *args, **kwargs):
         self.is_visible = self.stock > 0
@@ -104,8 +108,8 @@ class MenuDish(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        verbose_name = _('menu dish')
-        verbose_name_plural = _('menu dishes')
+        verbose_name = _('platillo')
+        verbose_name_plural = _('platillos')
 
     def save(self, *args, **kwargs):
         if self.image:
@@ -156,8 +160,8 @@ class MonthlyMenu(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        verbose_name = _('monthly menu')
-        verbose_name_plural = _('monthly menus')
+        verbose_name = _('menú mensual')
+        verbose_name_plural = _('menús mensuales')
         constraints = [
             models.UniqueConstraint(
                 fields=['institution', 'year', 'month'],
@@ -183,8 +187,8 @@ class DailyMenu(models.Model):
     dishes = models.ManyToManyField(MenuDish, blank=True, related_name='daily_menus')
 
     class Meta:
-        verbose_name = _('daily menu')
-        verbose_name_plural = _('daily menus')
+        verbose_name = _('menú diario')
+        verbose_name_plural = _('menús diarios')
         ordering = ['date']
         constraints = [
             models.UniqueConstraint(
@@ -205,9 +209,8 @@ class ValidityQuerySet(models.QuerySet):
 
 class ValidityPeriod(models.Model):
     """
-    Abstract base for catalog offers valid between two dates (discounts and
-    combos). The status is never stored: it is derived from the date, so an
-    offer stops applying on its own once end_date passes.
+    Abstract base for catalog offers (combos) valid between two dates. The status is never stored: it is derived from
+    the date, so an offer stops applying on its own once end_date passes.
     """
     class Status(models.TextChoices):
         SCHEDULED = 'SCHEDULED', _('Programada')
@@ -228,52 +231,6 @@ class ValidityPeriod(models.Model):
         if on_date > self.end_date:
             return self.Status.EXPIRED
         return self.Status.ACTIVE
-
-
-class Promotion(ValidityPeriod):
-    """
-    Percentage discount over catalog products (HU-03.3) for a validity period.
-    The product price is never modified: the discounted price is derived
-    while the promotion is in force, so the original price comes back on its
-    own once end_date passes, with no manual step or scheduled job.
-    Monthly menu dishes are out of scope: only MenuItem can be promoted.
-    """
-    institution = models.ForeignKey(
-        'users.Institution',
-        verbose_name=_('institution'),
-        on_delete=models.PROTECT,
-        related_name='promotions',
-    )
-    products = models.ManyToManyField(MenuItem, related_name='promotions')
-    discount_percentage = models.PositiveSmallIntegerField(
-        _('discount percentage'),
-        validators=[MinValueValidator(1), MaxValueValidator(99)],
-    )
-    image = models.ImageField(_('image'), upload_to='catalog/promotions/', blank=True, null=True)
-    created_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        verbose_name=_('created by'),
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name='created_promotions',
-    )
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        verbose_name = _('promotion')
-        verbose_name_plural = _('promotions')
-        ordering = ['-start_date', '-id']
-
-    def save(self, *args, **kwargs):
-        if self.image:
-            from delycattessen_backend.image_utils import resize_image_field
-            resize_image_field(self.image)
-        super().save(*args, **kwargs)
-
-    def __str__(self):
-        return f"-{self.discount_percentage}% ({self.start_date} - {self.end_date})"
 
 
 class Combo(ValidityPeriod):
@@ -311,6 +268,12 @@ class Combo(ValidityPeriod):
         verbose_name = _('combo')
         verbose_name_plural = _('combos')
         ordering = ['-start_date', '-id']
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(end_date__gte=models.F('start_date')),
+                name='catalog_combo_end_after_start',
+            ),
+        ]
 
     def save(self, *args, **kwargs):
         if self.image:
@@ -337,10 +300,11 @@ class ComboItem(models.Model):
     quantity = models.PositiveSmallIntegerField(_('quantity'), default=1, validators=[MinValueValidator(1)])
 
     class Meta:
-        verbose_name = _('combo item')
-        verbose_name_plural = _('combo items')
+        verbose_name = _('producto del combo')
+        verbose_name_plural = _('productos del combo')
         constraints = [
             models.UniqueConstraint(fields=['combo', 'menu_item'], name='unique_product_per_combo'),
+            models.CheckConstraint(condition=models.Q(quantity__gte=1), name='catalog_comboitem_quantity_min_1'),
         ]
 
     def __str__(self):
