@@ -307,12 +307,13 @@ class ChildSerializer(serializers.ModelSerializer):
     profile_picture = serializers.ImageField(read_only=True)
     balance = serializers.SerializerMethodField()
     wallet_id = serializers.SerializerMethodField()
+    low_balance_alert_amount = serializers.SerializerMethodField()
 
     class Meta:
         model = StudentProfile
         fields = (
             'id', 'first_name', 'second_name', 'last_name', 'second_last_name', 'username',
-            'institution_name', 'profile_picture', 'balance', 'wallet_id',
+            'institution_name', 'profile_picture', 'balance', 'wallet_id', 'low_balance_alert_amount',
         )
 
     def get_balance(self, obj):
@@ -322,6 +323,13 @@ class ChildSerializer(serializers.ModelSerializer):
     def get_wallet_id(self, obj):
         wallet = getattr(obj, 'wallet', None)
         return wallet.id if wallet else None
+
+    def get_low_balance_alert_amount(self, obj):
+        """The amount the parent chose to be warned at; None while the alert is off."""
+        control = getattr(obj, 'parental_control', None)
+        if control is None or not control.low_balance_alert_enabled:
+            return None
+        return str(control.low_balance_alert_amount)
     
 class AllergenSerializer(serializers.ModelSerializer):
     class Meta:
@@ -339,8 +347,17 @@ class VerifyPaymentPinSerializer(serializers.Serializer):
 class ParentalControlSerializer(serializers.ModelSerializer):
     class Meta:
         model = ParentalControl
-        fields = ['daily_limit_enabled', 'daily_limit_amount', 'allowed_days_enabled', 'allowed_days']
-        
+        fields = [
+            'daily_limit_enabled', 'daily_limit_amount', 'allowed_days_enabled', 'allowed_days',
+            'low_balance_alert_enabled', 'low_balance_alert_amount',
+        ]
+
+    def validate_low_balance_alert_amount(self, value):
+        if value < 0:
+            raise serializers.ValidationError(_('El monto del aviso de saldo bajo no puede ser negativo.'))
+        return value
+
+
 class ChangePasswordSerializer(serializers.Serializer):
     current_password = serializers.CharField(write_only=True, trim_whitespace=False)
     new_password = PasswordField()
