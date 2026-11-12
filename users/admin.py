@@ -336,14 +336,13 @@ class CustomUserAdmin(NoDeleteAdminMixin, admin.ModelAdmin):
 @admin.register(Institution)
 class InstitutionAdmin(admin.ModelAdmin):
     form = InstitutionForm
-    list_display = ('name', 'code', 'status')  # extended per request in get_list_display
+    list_display = ('name', 'status')  # extended per request in get_list_display
     list_filter = ('is_active',)
-    search_fields = ('name', 'code', 'contact_name', 'contact_email')
+    search_fields = ('name', 'address')
     actions = ('reactivate_institutions',)
     readonly_fields = ('suspended_at', 'registration_date')
     fieldsets = (
-        (_('Datos de la sede'), {'fields': ('name', 'code', 'address', 'phone')}),
-        (_('Contacto'), {'fields': ('contact_name', 'contact_email')}),
+        (_('Datos de la sede'), {'fields': ('name', 'address', 'phone')}),
         (_('Estado'), {
             'description': _(
                 'Una sede suspendida no aparece al registrar estudiantes ni personal nuevo. Las cuentas, '
@@ -381,7 +380,7 @@ class InstitutionAdmin(admin.ModelAdmin):
             return render
 
         return (
-            'name', 'code', 'status',
+            'name', 'status',
             column(_('Personal activo'), lambda s: s['staff']),
             column(_('Estudiantes'), lambda s: s['students']),
             column(_('Saldo de billeteras'), lambda s: f"$ {s['balance']}"),

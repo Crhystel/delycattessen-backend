@@ -7,11 +7,8 @@ from django.contrib.auth.hashers import check_password, make_password
 
 class Institution(models.Model):
     name = models.CharField(_('name'), max_length=255, unique=True)
-    code = models.CharField(_('código'), max_length=20, unique=True, null=True, blank=True)
     address = models.CharField(_('dirección'), max_length=255, blank=True)
     phone = models.CharField(_('teléfono'), max_length=30, blank=True)
-    contact_name = models.CharField(_('persona de contacto'), max_length=150, blank=True)
-    contact_email = models.EmailField(_('correo de contacto'), blank=True)
     # A suspended sede is hidden from new registrations (students, staff); its existing
     # accounts, sessions and sales keep working (see InstitutionAdmin).
     is_active = models.BooleanField(_('activa'), default=True)
