@@ -110,9 +110,6 @@ class InstitutionForm(forms.ModelForm):
             raise ValidationError(_('Ya existe una institución con este nombre.'))
         return name
 
-    def clean_code(self):
-        return (self.cleaned_data.get('code') or '').strip().upper() or None
-
     def clean(self):
         cleaned = super().clean()
         if self.instance.pk and self.instance.is_active and not cleaned.get('is_active', True):

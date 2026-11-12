@@ -12,7 +12,7 @@ from rest_framework.exceptions import ValidationError
 from core.timezone import local_today
 
 from .models import Allergen, Combo, ComboItem, MonthlyMenu, DailyMenu, MenuDish, MenuItem
-from .tasks import send_monthly_menu_published_email
+from .tasks import send_combo_created_email, send_monthly_menu_published_email
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +26,15 @@ def _notify_menu_published(monthly_menu_id: int) -> None:
         logger.exception(
             'Could not enqueue published-menu email for monthly menu %s', monthly_menu_id
         )
+
+
+def _notify_combo_created(combo_id: int) -> None:
+    """Enqueues the new-combo email. The combo is already committed, so an
+    unreachable broker must not turn the creation into a 500."""
+    try:
+        send_combo_created_email.delay(combo_id)
+    except (OperationalError, OSError):
+        logger.exception('Could not enqueue new-combo email for combo %s', combo_id)
 
 
 def sync_allergens_from_ingredients(obj) -> None:
@@ -200,6 +209,12 @@ class ComboService:
         if len(found) != len(quantities):
             raise ValidationError({'combos': _('Uno o más combos no están vigentes en esta institución.')})
         return [(found[combo_id], quantity) for combo_id, quantity in quantities.items()]
+
+    @staticmethod
+    def notify_created(combo: Combo) -> None:
+        """Emails the parents of the combo's institution once the creation commits.
+        Only called on creation: editing a combo does not notify again."""
+        transaction.on_commit(partial(_notify_combo_created, combo.id))
 
     @staticmethod
     @transaction.atomic

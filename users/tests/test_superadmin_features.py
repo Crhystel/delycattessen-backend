@@ -168,8 +168,7 @@ class InstitutionManagementTests(SuperadminTestCase):
         return reverse('admin:users_institution_change', args=[institution.pk])
 
     def post(self, institution, **overrides):
-        data = {'name': institution.name, 'code': '', 'address': '', 'phone': '', 'contact_name': '',
-                'contact_email': '', 'is_active': 'on', 'suspension_reason': ''}
+        data = {'name': institution.name, 'address': '', 'phone': '', 'is_active': 'on', 'suspension_reason': ''}
         data.update(overrides)
         if data['is_active'] is None:
             del data['is_active']
@@ -188,11 +187,11 @@ class InstitutionManagementTests(SuperadminTestCase):
         self.assertContains(response, '$ 7.50')
         self.assertContains(response, '$ 3.00 (1)')
 
-    def test_details_are_editable_and_normalised(self):
-        response = self.post(self.institution, code=' mc01 ', address='Av. 1', contact_email='a@x.com')
+    def test_details_are_editable(self):
+        response = self.post(self.institution, address='Av. 1', phone='099')
         self.assertEqual(response.status_code, 302)
         self.institution.refresh_from_db()
-        self.assertEqual((self.institution.code, self.institution.address), ('MC01', 'Av. 1'))
+        self.assertEqual((self.institution.address, self.institution.phone), ('Av. 1', '099'))
         self.assertTrue(AuditLog.objects.filter(action=AuditLog.Action.INSTITUTION_UPDATED).exists())
 
     def test_the_name_is_unique_ignoring_case(self):

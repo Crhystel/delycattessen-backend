@@ -12,11 +12,12 @@ from rest_framework.exceptions import ValidationError
 from .models import Transaction, Wallet
 
 
-def credit_wallet(wallet: Wallet, amount: Decimal) -> None:
+def credit_wallet(wallet: Wallet, amount: Decimal) -> Decimal:
     """Adds `amount` in the database (not in Python) so a concurrent debit or
-    recharge on the same wallet cannot be overwritten."""
+    recharge on the same wallet cannot be overwritten. Returns the new balance."""
     Wallet.objects.filter(pk=wallet.pk).update(balance=F('balance') + amount)
     wallet.refresh_from_db(fields=['balance'])
+    return wallet.balance
 
 
 def debit_wallet(wallet: Wallet, amount: Decimal, *, sale=None, pre_order=None) -> Wallet:
@@ -37,6 +38,7 @@ def debit_wallet(wallet: Wallet, amount: Decimal, *, sale=None, pre_order=None) 
         amount=amount,
         status=Transaction.Status.SUCCESS,
         type=Transaction.Type.CONSUMPTION,
+        balance_after=locked.balance,
         sale=sale,
         pre_order=pre_order,
     )
@@ -78,7 +80,9 @@ class PaymentGateway(ABC):
         transaction.external_transaction_id = external_id
         transaction.status = Transaction.Status.SUCCESS
         transaction.save(update_fields=['external_transaction_id', 'status'])
-        self._credit_balance(wallet, amount)
+        with db_transaction.atomic():
+            transaction.balance_after = self._credit_balance(wallet, amount)
+            transaction.save(update_fields=['balance_after'])
 
         from .tasks import send_recharge_confirmation_email
         send_recharge_confirmation_email.delay(transaction.id)
@@ -98,8 +102,8 @@ class PaymentGateway(ABC):
             type=Transaction.Type.RECHARGE,
         )
 
-    def _credit_balance(self, wallet: Wallet, amount: Decimal) -> None:
-        credit_wallet(wallet, amount)
+    def _credit_balance(self, wallet: Wallet, amount: Decimal) -> Decimal:
+        return credit_wallet(wallet, amount)
 
     @abstractmethod
     def _send_charge_request(
@@ -272,13 +276,13 @@ class PayphonePreparer:
 
             if data.get('transactionStatus') == 'Approved':
                 transaction.status = Transaction.Status.SUCCESS
-                credit_wallet(transaction.wallet, transaction.amount)
+                transaction.balance_after = credit_wallet(transaction.wallet, transaction.amount)
 
                 from .tasks import send_recharge_confirmation_email
                 send_recharge_confirmation_email.delay(transaction.id)
             else:
                 transaction.status = Transaction.Status.FAILED
-            transaction.save(update_fields=['status'])
+            transaction.save(update_fields=['status', 'balance_after'])
             return transaction
 
 
