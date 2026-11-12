@@ -91,7 +91,8 @@ class ComboListCreateView(OwnInstitutionMixin, generics.ListCreateAPIView):
     permission_classes = [IsAdministrator]
 
     def perform_create(self, serializer):
-        serializer.save(institution=self.get_user_institution(), created_by=self.request.user)
+        combo = serializer.save(institution=self.get_user_institution(), created_by=self.request.user)
+        ComboService.notify_created(combo)
 
 
 class ComboDetailView(OwnInstitutionMixin, generics.RetrieveUpdateDestroyAPIView):
