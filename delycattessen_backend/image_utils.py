@@ -1,7 +1,9 @@
 import io
 import os
-from PIL import Image
+from PIL import Image, ImageOps
 from django.core.files.base import ContentFile
+
+ORIENTATION_TAG = 0x0112  # EXIF "Orientation": 1 is upright
 
 
 def resize_image_field(field_file, max_dimension: int = 1024, quality: int = 85) -> bool:
@@ -9,6 +11,8 @@ def resize_image_field(field_file, max_dimension: int = 1024, quality: int = 85)
     Resizes an image FieldFile in-place using Pillow to a maximum dimension of
     `max_dimension` pixels per side (preserving aspect ratio) and encodes it as JPEG
     with the given quality (default 85).
+    Phone cameras store the pixels sideways plus an EXIF orientation tag; the
+    rotation is applied here because re-encoding drops the tag.
     Does not upscale images smaller than `max_dimension`.
     Returns True if the image was processed/modified, False otherwise.
     """
@@ -21,11 +25,14 @@ def resize_image_field(field_file, max_dimension: int = 1024, quality: int = 85)
             orig_w, orig_h = img.size
             needs_downscale = orig_w > max_dimension or orig_h > max_dimension
             is_jpeg = getattr(img, 'format', '').upper() in ('JPEG', 'JPG')
+            is_rotated = img.getexif().get(ORIENTATION_TAG, 1) != 1
 
-            # If already smaller/equal than max_dimension and already JPEG, no re-compression needed
-            if not needs_downscale and is_jpeg:
+            # If already smaller/equal than max_dimension, upright and JPEG, no re-compression needed
+            if not needs_downscale and is_jpeg and not is_rotated:
                 field_file.seek(0)
                 return False
+
+            img = ImageOps.exif_transpose(img)
 
             # Convert color mode to RGB if transparent or indexed
             if img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info):
