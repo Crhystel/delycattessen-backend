@@ -151,7 +151,7 @@ class MeSerializer(serializers.ModelSerializer):
             'must_change_password',
         )
     def get_has_children(self, obj):
-        return hasattr(obj, 'parent_profile') and obj.parent_profile.children.exists()
+        return hasattr(obj, 'parent_profile') and obj.parent_profile.children.active().exists()
 
     def get_has_payment_pin(self, obj):
         return hasattr(obj, 'parent_profile') and bool(obj.parent_profile.payment_pin_hash)
@@ -228,7 +228,7 @@ class StudentRegistrationSerializer(UppercaseNamesMixin,serializers.Serializer):
         parent_profile = self.context['parent_profile']
         institution = attrs.get('institution')
         existing_institution_id = (
-            parent_profile.children.values_list('institution_id', flat=True).first()
+            parent_profile.children.active().values_list('institution_id', flat=True).first()
         )
         if existing_institution_id and institution and existing_institution_id != institution.id:
             raise serializers.ValidationError({
@@ -392,6 +392,17 @@ class ChildPasswordChangeSerializer(serializers.Serializer):
         if attrs['new_password'] != attrs['confirm_password']:
             raise serializers.ValidationError({'confirm_password': _('Las contraseñas no coinciden.')})
         return attrs
+
+
+class ChildRemovalSerializer(serializers.Serializer):
+    """Removing a child is irreversible: the parent confirms with their OWN password
+    (a wrong one is a 400, never a 401 that would sign the parent out)."""
+    parent_password = serializers.CharField(write_only=True, trim_whitespace=False)
+
+    def validate_parent_password(self, value):
+        if not self.context['request'].user.check_password(value):
+            raise serializers.ValidationError(_('Tu contraseña es incorrecta.'))
+        return value
 
 
 class ChangePasswordSerializer(serializers.Serializer):

@@ -80,7 +80,7 @@ class ViewerAllergenContextMixin:
             student_id = int(self.request.query_params.get('student_id'))
         except (TypeError, ValueError):
             return None
-        return StudentProfile.objects.filter(pk=student_id, parent__user=self.request.user).first()
+        return StudentProfile.objects.active().filter(pk=student_id, parent__user=self.request.user).first()
 
     def get_serializer_context(self):
         context = super().get_serializer_context()

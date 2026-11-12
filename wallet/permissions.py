@@ -10,7 +10,9 @@ class IsWalletOwnerParent(BasePermission):
     message = _('No tienes permiso para operar sobre esta billetera.')
 
     def has_object_permission(self, request, view, obj):
-        return obj.student.parent.user_id == request.user.id
+        student = obj.student
+        # A removed child no longer has a wallet the parent can operate.
+        return student.parent.user_id == request.user.id and student.user.deleted_at is None
 
 
 class HasKushkiWebhookSecret(BasePermission):

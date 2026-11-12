@@ -41,6 +41,7 @@ from .serializers import (
     ChangePasswordSerializer,
     ChildPasswordChangeSerializer,
     ChildProfileUpdateSerializer,
+    ChildRemovalSerializer,
     ChildSerializer,
     CreateStaffSerializer,
     EmailTokenObtainSerializer,
@@ -58,13 +59,16 @@ from .serializers import (
     VerifyPaymentPinSerializer,
 )
 from .services import (
+    ChildRemovalBlocked,
     build_qr_token,
     change_child_password,
+    child_removal_blockers,
     create_staff_account,
     extract_unique_embedding,
     notify_staff_credentials,
     record_terms_acceptance,
     register_biometric,
+    remove_child,
     revoke_user_tokens,
     rotate_user_tokens,
     soft_delete_account,
@@ -262,7 +266,7 @@ class ChildrenListView(generics.ListAPIView):
     permission_classes = [IsAuthenticated, IsParentUser]
 
     def get_queryset(self):
-        return self.request.user.parent_profile.children.select_related('parental_control')
+        return self.request.user.parent_profile.children.active().select_related('parental_control')
 
 
 class ChildProfileUpdateView(APIView):
@@ -273,7 +277,7 @@ class ChildProfileUpdateView(APIView):
     permission_classes = [IsAuthenticated, IsParentOfStudent]
 
     def patch(self, request, student_id):
-        student_profile = get_object_or_404(StudentProfile.objects.select_related('user'), pk=student_id)
+        student_profile = get_object_or_404(StudentProfile.objects.active().select_related('user'), pk=student_id)
         serializer = ChildProfileUpdateSerializer(student_profile.user, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
@@ -301,6 +305,47 @@ class ChildPasswordView(APIView):
         return Response({'message': _('La contraseña de tu hijo/a se actualizó correctamente.')})
 
 
+class ChildRemovalCheckView(APIView):
+    """
+    GET /api/users/children/<student_id>/removal-check/
+    Tells the app whether the child can be removed and, if not, why, so it can
+    show the conditions before asking for the parent's password.
+    """
+    permission_classes = [IsAuthenticated, IsParentOfStudent]
+
+    def get(self, request, student_id):
+        student = get_object_or_404(StudentProfile.objects.active().select_related('user'), pk=student_id)
+        blockers = child_removal_blockers(student)
+        return Response({'can_remove': not blockers, 'blockers': blockers})
+
+
+class ChildRemoveView(APIView):
+    """
+    POST /api/users/children/<student_id>/remove/
+    The parent removes their child (soft delete), confirming with their own password.
+    200 when done; 400 for a wrong password; 409 with `blockers` while the child
+    still has a balance, pending pre-orders or a recharge in process. Attempts are
+    rate limited (scope `child_account`).
+    """
+    permission_classes = [IsAuthenticated, IsParentOfStudent]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'child_account'
+
+    def post(self, request, student_id):
+        student = get_object_or_404(
+            StudentProfile.objects.active().select_related('user', 'parent__user'), pk=student_id,
+        )
+        ChildRemovalSerializer(data=request.data, context={'request': request}).is_valid(raise_exception=True)
+        try:
+            remove_child(student, parent=request.user, request=request)
+        except ChildRemovalBlocked as blocked:
+            return Response(
+                {'detail': blocked.message, 'code': blocked.code, 'blockers': blocked.blockers},
+                status=status.HTTP_409_CONFLICT,
+            )
+        return Response({'message': _('Se dio de baja a tu hijo/a.')})
+
+
 class ChildPhotoUpdateView(APIView):
     """
     PATCH /api/users/children/<student_id>/photo/
@@ -310,7 +355,7 @@ class ChildPhotoUpdateView(APIView):
     parser_classes = [MultiPartParser, FormParser]
 
     def patch(self, request, student_id):
-        student_profile = get_object_or_404(StudentProfile, pk=student_id)
+        student_profile = get_object_or_404(StudentProfile.objects.active(), pk=student_id)
         if 'profile_picture' not in request.FILES:
             return Response({'error': _('No se envió ninguna imagen.')}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -382,7 +427,7 @@ class StudentAllergyView(BaseAllergyView):
     permission_classes = [IsAuthenticated, IsParentOfStudent]
 
     def get_owner(self, request, student_id):
-        return get_object_or_404(StudentProfile, pk=student_id)
+        return get_object_or_404(StudentProfile.objects.active(), pk=student_id)
 
 
 class TeacherAllergyView(BaseAllergyView):
@@ -438,7 +483,9 @@ class ParentalControlView(generics.RetrieveUpdateAPIView):
 
     def get_object(self):
         student_id = self.kwargs.get('student_id')
-        student = generics.get_object_or_404(StudentProfile, id=student_id, parent=self.request.user.parent_profile)
+        student = generics.get_object_or_404(
+            StudentProfile.objects.active(), id=student_id, parent=self.request.user.parent_profile,
+        )
         obj, created = ParentalControl.objects.get_or_create(student=student)
         return obj
 

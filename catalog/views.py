@@ -316,7 +316,10 @@ class BaseStudentMenuView(APIView):
         self.check_object_permissions(request, student)
 
     def student_queryset(self):
-        return StudentProfile.objects.select_related('institution', 'parental_control').prefetch_related('allergies')
+        return (
+            StudentProfile.objects.active()
+            .select_related('institution', 'parental_control').prefetch_related('allergies')
+        )
 
     def get_student(self, request, student_id):
         student = get_object_or_404(self.student_queryset(), id=student_id)
