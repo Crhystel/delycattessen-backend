@@ -14,7 +14,7 @@ def display_name(user):
     return ' '.join(part for part in parts if part) or user.username
 
 
-def _client_ip(request):
+def client_ip(request):
     if request is None:
         return None
     forwarded = request.META.get('HTTP_X_FORWARDED_FOR')
@@ -46,7 +46,7 @@ def record_audit(action, *, actor=None, target=None, institution=None, source=Au
             actor=actor if has_actor else None,
             actor_label=display_name(actor) if has_actor else '',
             action=action, target_type=target_type, target_id=target_id, target_label=target_label[:200],
-            institution=institution, source=source, ip=_client_ip(request), detail=_clean_detail(detail),
+            institution=institution, source=source, ip=client_ip(request), detail=_clean_detail(detail),
         )
     except Exception:  # noqa: BLE001 - auditing must never take the operation down
         logger.exception('Could not write the audit entry %s', action)

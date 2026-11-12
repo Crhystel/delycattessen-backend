@@ -4,8 +4,8 @@ from unittest import mock
 
 import pytest
 
-from wallet.models import Transaction, Wallet
-from wallet.services import GatewayError
+from wallet.models import Transaction
+from wallet.services import GatewayError, KushkiGateway
 from wallet.tasks import process_recharge_task, send_recharge_confirmation_email
 
 pytestmark = pytest.mark.django_db
@@ -36,12 +36,18 @@ def recharge_transaction(wallet):
     )
 
 
+@pytest.fixture
+def queued_recharge(wallet):
+    """The pending record RechargeService creates before queuing the task."""
+    return KushkiGateway()._create_pending_transaction(wallet, Decimal('20.00'))
+
+
 # --- process_recharge_task --------------------------------------------------
 
-def test_process_recharge_task_success_credits_wallet(wallet, kushki_post, mock_celery_delay):
+def test_process_recharge_task_success_credits_wallet(wallet, queued_recharge, kushki_post, mock_celery_delay):
     kushki_post.return_value = make_response(200, {'ticketNumber': 'T-9'})
 
-    process_recharge_task(wallet.id, '20.00', 'tok-1', 'CC', '1712345678', '0999999999')
+    process_recharge_task(queued_recharge.id, 'tok-1', 'CC', '1712345678', '0999999999')
 
     wallet.refresh_from_db()
     transaction = Transaction.objects.get()
@@ -52,13 +58,12 @@ def test_process_recharge_task_success_credits_wallet(wallet, kushki_post, mock_
 
 
 def test_process_recharge_task_gateway_error_marks_failed_and_reraises(
-    wallet, kushki_post, mock_celery_delay
+    wallet, queued_recharge, kushki_post, mock_celery_delay
 ):
     kushki_post.return_value = make_response(402, {'message': 'Card declined'})
 
-    # Called directly (no worker), Celery's retry() re-raises the original error.
     with pytest.raises(GatewayError, match='Card declined'):
-        process_recharge_task(wallet.id, '20.00', 'tok-1')
+        process_recharge_task(queued_recharge.id, 'tok-1')
 
     wallet.refresh_from_db()
     assert wallet.balance == Decimal('10.00')
@@ -66,9 +71,8 @@ def test_process_recharge_task_gateway_error_marks_failed_and_reraises(
     mock_celery_delay.email.assert_not_called()
 
 
-def test_process_recharge_task_unknown_wallet_raises_and_skips_http(kushki_post):
-    with pytest.raises(Wallet.DoesNotExist):
-        process_recharge_task(999999, '20.00', 'tok-1')
+def test_process_recharge_task_unknown_recharge_is_skipped_without_http(kushki_post):
+    process_recharge_task(999999, 'tok-1')
 
     kushki_post.assert_not_called()
 

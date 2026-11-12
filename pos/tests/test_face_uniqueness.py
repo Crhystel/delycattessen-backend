@@ -92,7 +92,7 @@ class FaceUniquenessTests(APITestCase):
         self._auth(self.parent_user)
         with mock.patch(EXTRACT, **extract):
             return self.client.patch(
-                f'/api/users/children/{child.id}/photo/', {'profile_picture': _photo('new.gif')}, format='multipart')
+                f'/api/users/children/{child.id}/photo/', {'profile_picture': _photo('new.gif'), 'accept_terms': 'true'}, format='multipart')
 
     def test_photo_update_replaces_embedding_and_photo(self):
         self._store(self.child1.user, _unit(0))
@@ -133,6 +133,7 @@ class FaceUniquenessTests(APITestCase):
         payload = {
             'first_name': 'Luis', 'first_last_name': 'Gomez', 'institution_id': self.inst_a.id,
             'username': 'luis_new', 'password': 'Str0ngPass!234', 'profile_picture': _photo('luis.gif'),
+            'accept_terms': 'true',
         }
         with mock.patch(EXTRACT, return_value=_unit(0)):
             response = self.client.post('/api/users/student-registration/', payload, format='multipart')

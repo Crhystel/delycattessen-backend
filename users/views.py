@@ -21,7 +21,7 @@ from core.mixins import InstitutionScopeMixin
 
 from .mixins import TokenGeneratorMixin
 from .audit import record_audit
-from .models import AuditLog, CustomUser, Institution, ParentalControl, StudentProfile
+from .models import AuditLog, CustomUser, Institution, ParentalControl, StudentProfile, TermsAcceptance
 from .permissions import (
     CanEditOwnProfile,
     CanManageStaffAccount,
@@ -53,6 +53,7 @@ from .serializers import (
     PasswordResetRequestSerializer,
     SetPaymentPinSerializer,
     StudentRegistrationSerializer,
+    TermsConsentSerializer,
     UpdateStaffSerializer,
     VerifyPaymentPinSerializer,
 )
@@ -62,6 +63,7 @@ from .services import (
     create_staff_account,
     extract_unique_embedding,
     notify_staff_credentials,
+    record_terms_acceptance,
     register_biometric,
     revoke_user_tokens,
     rotate_user_tokens,
@@ -223,7 +225,7 @@ class ParentRegistrationView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        serializer = ParentRegistrationSerializer(data=request.data)
+        serializer = ParentRegistrationSerializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
         refresh = RefreshToken.for_user(user)
@@ -240,7 +242,7 @@ class StudentRegistrationView(APIView):
     def post(self, request):
         serializer = StudentRegistrationSerializer(
             data=request.data,
-            context={'parent_profile': request.user.parent_profile},
+            context={'parent_profile': request.user.parent_profile, 'request': request},
         )
         serializer.is_valid(raise_exception=True)
         student_profile = serializer.save()
@@ -313,6 +315,7 @@ class ChildPhotoUpdateView(APIView):
             return Response({'error': _('No se envió ninguna imagen.')}, status=status.HTTP_400_BAD_REQUEST)
 
         photo = request.FILES['profile_picture']
+        TermsConsentSerializer(data=request.data).is_valid(raise_exception=True)
 
         # The new face must be valid and unique BEFORE anything is saved, so the
         # photo and the embedding used by the POS never get out of sync.
@@ -325,6 +328,9 @@ class ChildPhotoUpdateView(APIView):
             photo.seek(0)
             student_profile.profile_picture = photo
             student_profile.save()
+            record_terms_acceptance(
+                request.user, TermsAcceptance.Document.CHILD_PHOTO, request, student=student_profile,
+            )
 
         data = ChildSerializer(student_profile).data
         data['biometric_registered'] = True

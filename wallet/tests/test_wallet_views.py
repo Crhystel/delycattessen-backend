@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest import mock
 import requests
 import pytest
+from kombu.exceptions import OperationalError
 from rest_framework.test import APIClient
 
 from wallet.models import Transaction
@@ -109,9 +110,27 @@ def test_recharge_from_threshold_queues_kushki_task(parent_client, wallet, mock_
     response = parent_client.post(RECHARGE_URL, payload, format='json')
 
     assert response.status_code == 202
-    mock_celery_delay.recharge.assert_called_once_with(
-        wallet.id, '20.00', 'tok-1', 'CC', '1712345678', '0999999999'
+    pending = Transaction.objects.get(wallet=wallet)
+    assert (pending.status, pending.gateway, pending.amount, pending.claimed_at) == (
+        Transaction.Status.PENDING, Transaction.Gateway.KUSHKI, Decimal('20.00'), None,
     )
+    mock_celery_delay.recharge.assert_called_once_with(
+        pending.id, 'tok-1', 'CC', '1712345678', '0999999999'
+    )
+
+
+def test_recharge_with_broker_down_answers_503_and_fails_the_record(parent_client, wallet, mock_celery_delay):
+    mock_celery_delay.recharge.side_effect = OperationalError('broker unreachable')
+
+    response = parent_client.post(
+        RECHARGE_URL, {'wallet_id': wallet.id, 'amount': '20.00', 'kushki_token': 'tok-1'}, format='json',
+    )
+
+    assert response.status_code == 503
+    assert 'no está disponible' in response.json()['detail']
+    assert Transaction.objects.get(wallet=wallet).status == Transaction.Status.FAILED
+    wallet.refresh_from_db()
+    assert wallet.balance == Decimal('10.00')
 
 
 @pytest.mark.parametrize('token_payload', [{}, {'kushki_token': ''}])

@@ -4,40 +4,49 @@ from django.template.loader import render_to_string
 from django.utils.html import strip_tags
 from celery import shared_task
 from core.timezone import LOCAL_TIMEZONE
-from .models import Wallet
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=10)
 def process_recharge_task(
     self,
-    wallet_id: int,
-    amount: str,
+    transaction_id: int,
     token: str = None,
     document_type: str = None,
     document_number: str = None,
     phone_number: str = None,
 ) -> None:
-    """Processes payment confirmation asynchronously via RabbitMQ.
+    """Charges the pending card recharge queued by RechargeService.
 
+    Nothing is charged when the recharge expired in the queue (the worker was
+    down longer than RECHARGE_QUEUE_TIMEOUT_SECONDS) or another worker took it.
     Only retried when the gateway was unreachable (the request never got
-    through). A definitive rejection is not retried: it would only create more
-    FAILED transactions for the same declined card."""
-    from decimal import Decimal
-    from .services import GatewayRouter, GatewayUnavailableError
+    through); after the last attempt the recharge is failed. A definitive
+    rejection is not retried: it would only charge the declined card again."""
+    from .services import (
+        GatewayRouter, GatewayUnavailableError, claim_pending_recharge, fail_recharge, release_recharge,
+    )
 
-    wallet = Wallet.objects.get(pk=wallet_id)
-    gateway = GatewayRouter().get_gateway(Decimal(amount))
+    transaction = claim_pending_recharge(transaction_id)
+    if transaction is None:
+        return
+    gateway = GatewayRouter().get_gateway(transaction.amount)
     try:
         gateway.process_recharge(
-            wallet, Decimal(amount), token=token,
+            transaction.wallet, transaction.amount, token=token,
             document_type=document_type, document_number=document_number,
-            phone_number=phone_number,
+            phone_number=phone_number, transaction=transaction,
         )
     except GatewayUnavailableError as exc:
+        if self.request.retries >= self.max_retries:
+            fail_recharge(transaction)
+            return
+        release_recharge(transaction)
         raise self.retry(exc=exc)
 
 
-@shared_task(bind=True, max_retries=3, default_retry_delay=10)
+# acks_late + reject_on_worker_lost: if the worker dies mid-send the message goes
+# back to the queue instead of being lost (an e-mail sent twice is harmless).
+@shared_task(bind=True, max_retries=3, default_retry_delay=10, acks_late=True, reject_on_worker_lost=True)
 def send_recharge_confirmation_email(self, transaction_id: int) -> None:
     """Sends a confirmation email after a successful recharge."""
     from .models import Transaction  # local import to avoid circular import at module load

@@ -10,12 +10,12 @@ from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from catalog.models import Allergen
 
-from .models import CustomUser, Institution, ParentalControl, ParentProfile, StudentProfile
+from .models import CustomUser, Institution, ParentalControl, ParentProfile, StudentProfile, TermsAcceptance
 from .mixins import (
     CODE_TTL_SECONDS, MAX_CODE_ATTEMPTS, UppercaseNamesMixin, reset_attempts_key, reset_code_key,
 )
-from .fields import PasswordField
-from .services import register_student
+from .fields import AcceptTermsField, PasswordField
+from .services import record_terms_acceptance, register_student
 
 logger = logging.getLogger(__name__)
 
@@ -166,6 +166,7 @@ class ParentRegistrationSerializer(serializers.Serializer):
     email = serializers.EmailField()
     password = PasswordField()
     password_confirm = serializers.CharField(write_only=True, trim_whitespace=False)
+    accept_terms = AcceptTermsField()
 
     def validate_email(self, value):
         value = value.lower()
@@ -188,6 +189,9 @@ class ParentRegistrationSerializer(serializers.Serializer):
             role=CustomUser.Role.PARENT,
         )
         ParentProfile.objects.create(user=user)
+        record_terms_acceptance(
+            user, TermsAcceptance.Document.PARENT_REGISTRATION, self.context.get('request'),
+        )
         return user
 
     @staticmethod
@@ -212,6 +216,7 @@ class StudentRegistrationSerializer(UppercaseNamesMixin,serializers.Serializer):
     username = serializers.CharField(max_length=150)
     password = PasswordField()
     profile_picture = serializers.ImageField()
+    accept_terms = AcceptTermsField()
 
     def validate_username(self, value):
         if CustomUser.objects.filter(username=value).exists():
@@ -232,7 +237,19 @@ class StudentRegistrationSerializer(UppercaseNamesMixin,serializers.Serializer):
         return attrs
 
     def create(self, validated_data):
-        return register_student(self.context['parent_profile'], validated_data)
+        validated_data.pop('accept_terms')
+        parent_profile = self.context['parent_profile']
+        student_profile = register_student(parent_profile, validated_data)
+        record_terms_acceptance(
+            parent_profile.user, TermsAcceptance.Document.STUDENT_REGISTRATION,
+            self.context.get('request'), student=student_profile,
+        )
+        return student_profile
+
+
+class TermsConsentSerializer(serializers.Serializer):
+    """Only the terms checkbox, for actions without other input (a new photo)."""
+    accept_terms = AcceptTermsField()
 
 
 class ProfileUpdateSerializer(UppercaseNamesMixin, serializers.ModelSerializer):

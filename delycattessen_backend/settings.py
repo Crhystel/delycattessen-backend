@@ -247,6 +247,12 @@ WALLET_RECHARGE_MIN_AMOUNT = config('WALLET_RECHARGE_MIN_AMOUNT', default=1.00, 
 WALLET_LOW_BALANCE_DEFAULT = config('WALLET_LOW_BALANCE_DEFAULT', default=5.00, cast=float)
 # Seconds to wait for a payment gateway HTTP answer.
 GATEWAY_HTTP_TIMEOUT = config('GATEWAY_HTTP_TIMEOUT', default=10, cast=int)
+# Version of the terms and conditions users accept when they register a parent or
+# a child, or change a child's photo (stored with each acceptance as evidence).
+TERMS_VERSION = config('TERMS_VERSION', default='2026-11')
+# Seconds a card recharge may wait in the queue for a Celery worker. Past that it
+# is marked failed and never charged (the parent simply tries again).
+RECHARGE_QUEUE_TIMEOUT_SECONDS = config('RECHARGE_QUEUE_TIMEOUT_SECONDS', default=120, cast=int)
 
 KUSHKI_PUBLIC_MERCHANT_ID = config('KUSHKI_PUBLIC_MERCHANT_ID', default='')
 KUSHKI_PRIVATE_MERCHANT_ID = config('KUSHKI_PRIVATE_MERCHANT_ID', default='')

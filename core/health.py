@@ -145,6 +145,11 @@ def run_checks(include_smtp=False):
     return checks
 
 
+def check_workers():
+    """Only the Celery workers probe, for the scheduled alert (check_celery_workers)."""
+    return _timed('Workers de Celery', _worker_queue)
+
+
 def overall_status(checks):
     statuses = {c.status for c in checks}
     if ERROR in statuses:

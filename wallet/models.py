@@ -104,6 +104,11 @@ class Transaction(models.Model):
         blank=True,
         help_text=_('Wallet balance right after this movement; empty when pending, failed or not reconstructable.'),
     )
+    claimed_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text=_('When a Celery worker took this pending card recharge; empty while it waits in the queue.'),
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

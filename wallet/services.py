@@ -1,11 +1,14 @@
 import urllib.parse
 from abc import ABC, abstractmethod
+from datetime import timedelta
 from decimal import Decimal
 
 import requests
 from django.conf import settings
 from django.db import transaction as db_transaction
 from django.db.models import F
+from django.utils import timezone
+from kombu.exceptions import OperationalError
 from django.utils.translation import gettext_lazy as _
 from rest_framework.exceptions import ValidationError
 
@@ -63,17 +66,24 @@ class PaymentGateway(ABC):
     def process_recharge(
         self, wallet: Wallet, amount: Decimal, token: str = None,
         document_type: str = None, document_number: str = None,
-        phone_number: str = None,
+        phone_number: str = None, transaction: Transaction = None,
     ) -> Transaction:
+        """`transaction` is the pending record created when the recharge was
+        queued (see RechargeService); without it one is created here."""
         self._validate_amount(amount)
-        transaction = self._create_pending_transaction(wallet, amount)
+        queued = transaction is not None
+        transaction = transaction or self._create_pending_transaction(wallet, amount)
         try:
             external_id = self._send_charge_request(
                 wallet, amount, token=token,
                 document_type=document_type, document_number=document_number,
                 phone_number=phone_number,
             )
-        except GatewayError:
+        except GatewayError as exc:
+            # A queued recharge stays pending while the gateway is unreachable,
+            # so the task's retry charges that same record.
+            if queued and isinstance(exc, GatewayUnavailableError):
+                raise
             transaction.status = Transaction.Status.FAILED
             transaction.save(update_fields=['status'])
             raise
@@ -299,8 +309,60 @@ class RechargeService:
 
         if not kushki_token:
             raise GatewayError(_('Falta el token de Kushki.'))
+        expire_unclaimed_recharges()
+        # Recorded before queuing, so a recharge no worker takes can be failed
+        # on time instead of being charged much later with an expired token.
+        transaction = gateway._create_pending_transaction(wallet, amount)
         from .tasks import process_recharge_task
-        process_recharge_task.delay(
-            wallet.id, str(amount), kushki_token, document_type, document_number, phone_number,
-        )
+        try:
+            process_recharge_task.delay(
+                transaction.id, kushki_token, document_type, document_number, phone_number,
+            )
+        except (OperationalError, OSError) as exc:
+            Transaction.objects.filter(pk=transaction.pk).update(status=Transaction.Status.FAILED)
+            raise GatewayUnavailableError(
+                _('El servicio de pagos no está disponible en este momento. Intenta de nuevo en unos minutos.')
+            ) from exc
         return {'detail': _('Recarga recibida, procesando.')}, 202
+
+
+def expire_unclaimed_recharges(now=None) -> int:
+    """
+    Fails the card recharges no Celery worker took within
+    RECHARGE_QUEUE_TIMEOUT_SECONDS (the worker is down). They are never
+    charged afterwards: claim_pending_recharge() refuses them. Runs whenever a
+    recharge starts or the parent opens the movements, so the app always ends
+    up showing a final state. Returns how many were failed.
+    """
+    deadline = (now or timezone.now()) - timedelta(seconds=settings.RECHARGE_QUEUE_TIMEOUT_SECONDS)
+    return Transaction.objects.filter(
+        type=Transaction.Type.RECHARGE,
+        gateway=Transaction.Gateway.KUSHKI,
+        status=Transaction.Status.PENDING,
+        claimed_at__isnull=True,
+        created_at__lt=deadline,
+    ).update(status=Transaction.Status.FAILED)
+
+
+def claim_pending_recharge(transaction_id: int):
+    """Marks the queued recharge as taken by this worker and returns it, or
+    None when it expired, failed or another worker already took it: in that
+    case the card must not be charged."""
+    expire_unclaimed_recharges()
+    claimed = Transaction.objects.filter(
+        pk=transaction_id, status=Transaction.Status.PENDING, claimed_at__isnull=True,
+    ).update(claimed_at=timezone.now())
+    if not claimed:
+        return None
+    return Transaction.objects.select_related('wallet').get(pk=transaction_id)
+
+
+def release_recharge(transaction: Transaction) -> None:
+    """Gives the recharge back to the queue before a retry (gateway unreachable)."""
+    Transaction.objects.filter(pk=transaction.pk, status=Transaction.Status.PENDING).update(claimed_at=None)
+
+
+def fail_recharge(transaction: Transaction) -> None:
+    Transaction.objects.filter(pk=transaction.pk, status=Transaction.Status.PENDING).update(
+        status=Transaction.Status.FAILED,
+    )

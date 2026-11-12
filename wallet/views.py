@@ -15,7 +15,10 @@ from .permissions import HasKushkiWebhookSecret, IsWalletOwnerParent
 from users.permissions import IsParentUser
 
 from .serializers import RechargeGatewayQuerySerializer, RechargeRequestSerializer, TransactionSerializer
-from .services import GatewayError, GatewayRouter, PayphonePreparer, RechargeService
+from .services import (
+    GatewayError, GatewayRouter, GatewayUnavailableError, PayphonePreparer, RechargeService,
+    expire_unclaimed_recharges,
+)
 from .tasks import send_recharge_confirmation_email
 
 
@@ -103,6 +106,8 @@ class WalletRechargeView(APIView):
             body, http_status = RechargeService().start(
                 wallet, amount, kushki_token, document_type, document_number, phone_number,
             )
+        except GatewayUnavailableError as exc:
+            return Response({'detail': str(exc)}, status=503)
         except GatewayError as exc:
             return Response({'detail': str(exc)}, status=400)
         return Response(body, status=http_status)
@@ -139,6 +144,8 @@ class WalletTransactionListView(APIView):
     def get(self, request, wallet_id):
         wallet = get_object_or_404(Wallet, pk=wallet_id)
         self.check_object_permissions(request, wallet)
+        # A card recharge stuck in the queue shows up as failed, not "en proceso" forever.
+        expire_unclaimed_recharges()
 
         transactions = wallet.transactions.select_related('pre_order', 'sale').prefetch_related(
             'pre_order__items__dish', 'sale__items__menu_item'

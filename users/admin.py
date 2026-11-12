@@ -27,7 +27,7 @@ from .admin_services import (
 )
 from .admin_stats import institution_stats
 from .audit import display_name, record_audit
-from .models import AuditLog, CustomUser, Institution, ParentProfile, StudentProfile
+from .models import AuditLog, CustomUser, Institution, ParentProfile, StudentProfile, TermsAcceptance
 from .services import (
     create_staff_account,
     notify_staff_credentials,
@@ -479,6 +479,17 @@ class StudentProfileAdmin(ReadOnlyAdminMixin, admin.ModelAdmin):
             return f'$ {obj.wallet.balance}'
         except ObjectDoesNotExist:
             return _('Sin billetera')
+
+
+@admin.register(TermsAcceptance)
+class TermsAcceptanceAdmin(ReadOnlyAdminMixin, admin.ModelAdmin):
+    """Legal evidence of who accepted which version of the terms and when. Review only."""
+
+    list_display = ('accepted_at', 'user', 'document', 'version', 'student', 'ip')
+    list_filter = ('document', 'version')
+    search_fields = ('user__email', 'user__username', 'ip')
+    date_hierarchy = 'accepted_at'
+    list_select_related = ('user', 'student__user')
 
 
 @admin.register(AuditLog)

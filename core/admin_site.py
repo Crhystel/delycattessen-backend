@@ -29,6 +29,7 @@ class DelycattessenAdminSite(AdminSite):
         )),
         ('Seguridad y sistema', (
             ('users', 'auditlog'),   # who did what, from the app, the superadmin and the system
+            ('users', 'termsacceptance'),  # legal evidence of each acceptance of the terms
             ('admin', 'logentry'),   # changes made in this panel
             ('axes', 'accesslog'),   # logins to this panel
             ('axes', 'accessattempt'),  # deleting a row here unlocks a blocked login

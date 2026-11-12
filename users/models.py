@@ -248,3 +248,33 @@ class AuditLog(models.Model):
 
     def __str__(self) -> str:
         return f'{self.get_action_display()} · {self.target_label or self.target_type} · {self.created_at:%Y-%m-%d %H:%M}'
+
+
+class TermsAcceptance(models.Model):
+    """Legal evidence of every acceptance of the terms and conditions: who
+    accepted, which document and version, when and from which IP. Rows are never
+    edited: accepting again (a new photo, a new version) adds a new one."""
+
+    class Document(models.TextChoices):
+        PARENT_REGISTRATION = 'PARENT_REGISTRATION', _('Registro del padre de familia')
+        STUDENT_REGISTRATION = 'STUDENT_REGISTRATION', _('Registro del hijo con su foto')
+        CHILD_PHOTO = 'CHILD_PHOTO', _('Cambio de foto del hijo')
+
+    user = models.ForeignKey(
+        CustomUser, verbose_name=_('usuario'), on_delete=models.CASCADE, related_name='terms_acceptances',
+    )
+    student = models.ForeignKey(
+        StudentProfile, verbose_name=_('hijo'), on_delete=models.SET_NULL, null=True, blank=True, related_name='+',
+    )
+    document = models.CharField(_('documento'), max_length=30, choices=Document.choices)
+    version = models.CharField(_('versión de los términos'), max_length=20)
+    ip = models.GenericIPAddressField(_('IP'), null=True, blank=True)
+    accepted_at = models.DateTimeField(_('fecha de aceptación'), auto_now_add=True, db_index=True)
+
+    class Meta:
+        verbose_name = _('aceptación de términos')
+        verbose_name_plural = _('aceptaciones de términos')
+        ordering = ['-accepted_at']
+
+    def __str__(self) -> str:
+        return f'{self.get_document_display()} · v{self.version} · {self.accepted_at:%Y-%m-%d %H:%M}'

@@ -7,7 +7,7 @@ from django.template.loader import render_to_string
 from django.utils.translation import gettext_lazy as _
 
 
-@shared_task
+@shared_task(acks_late=True, reject_on_worker_lost=True)
 def send_password_reset_email(email: str, code: str) -> None:
     """
     Asynchronous task (Celery/RabbitMQ): sends the password reset
@@ -27,7 +27,10 @@ def send_password_reset_email(email: str, code: str) -> None:
     message.send()
 
 
-@shared_task(autoretry_for=(SMTPException, OSError), retry_backoff=True, max_retries=3)
+@shared_task(
+    autoretry_for=(SMTPException, OSError), retry_backoff=True, max_retries=3,
+    acks_late=True, reject_on_worker_lost=True,
+)
 def send_staff_credentials_email(email: str, first_name: str, role_label: str, temporary_password: str) -> None:
     """
     Asynchronous task (Celery/RabbitMQ): sends the temporary password to the
@@ -61,7 +64,10 @@ def send_staff_credentials_email(email: str, first_name: str, role_label: str, t
     message.send()
 
 
-@shared_task(autoretry_for=(SMTPException, OSError), retry_backoff=True, max_retries=3)
+@shared_task(
+    autoretry_for=(SMTPException, OSError), retry_backoff=True, max_retries=3,
+    acks_late=True, reject_on_worker_lost=True,
+)
 def send_password_reset_by_admin_email(
     email: str, first_name: str, account_label: str, login: str, temporary_password: str,
 ) -> None:
@@ -97,7 +103,10 @@ def send_password_reset_by_admin_email(
     message.send()
 
 
-@shared_task(autoretry_for=(SMTPException, OSError), retry_backoff=True, max_retries=3)
+@shared_task(
+    autoretry_for=(SMTPException, OSError), retry_backoff=True, max_retries=3,
+    acks_late=True, reject_on_worker_lost=True,
+)
 def send_child_password_changed_email(email: str, first_name: str, child_name: str, child_username: str) -> None:
     """
     Asynchronous task (Celery/RabbitMQ): tells the parent that the password of

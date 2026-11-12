@@ -9,7 +9,7 @@ def build_teacher_credit_export_task(export_id: int) -> None:
     run_teacher_credit_export(export_id)
 
 
-@shared_task(bind=True, max_retries=3)
+@shared_task(bind=True, max_retries=3, acks_late=True, reject_on_worker_lost=True)
 def send_credit_statement_email(self, statement_id: int) -> None:
     """Emails the credit statement of one teacher and month. Only the id travels in the task, never
     the amounts. Retried only on delivery failures (SMTP down, network); after the last attempt

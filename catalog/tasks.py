@@ -95,7 +95,7 @@ class RelatedImageEmail(EmailMultiAlternatives):
         return message
 
 
-@shared_task(bind=True, max_retries=3, default_retry_delay=10)
+@shared_task(bind=True, max_retries=3, default_retry_delay=10, acks_late=True, reject_on_worker_lost=True)
 def send_monthly_menu_published_email(self, monthly_menu_id: int) -> None:
     """
     Sends an individual HTML + plain text email notification using the
@@ -206,7 +206,7 @@ def _plain_text(html_content: str) -> str:
     return re.sub(r'\n{3,}', '\n\n', '\n'.join(lines)).strip()
 
 
-@shared_task(bind=True, max_retries=3, default_retry_delay=10)
+@shared_task(bind=True, max_retries=3, default_retry_delay=10, acks_late=True, reject_on_worker_lost=True)
 def send_combo_created_email(self, combo_id: int) -> None:
     """
     Emails every parent with a child in the combo's institution about the new

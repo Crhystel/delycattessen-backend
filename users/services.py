@@ -298,3 +298,14 @@ def wallet_balance_of(user):
     if hasattr(user, 'wallet'):
         return str(user.wallet.balance)
     return '0.00'
+
+
+def record_terms_acceptance(user, document, request=None, student=None):
+    """Stores the acceptance of the current TERMS_VERSION as legal evidence."""
+    from .audit import client_ip
+    from .models import TermsAcceptance
+
+    return TermsAcceptance.objects.create(
+        user=user, student=student, document=document,
+        version=settings.TERMS_VERSION, ip=client_ip(request),
+    )
