@@ -88,7 +88,7 @@ class ViewerInstitutionMixin:
             if not student_id:
                 raise ValidationError({'student_id': _('Debe indicar el estudiante.')})
             try:
-                student = StudentProfile.objects.select_related('institution').get(
+                student = StudentProfile.objects.active().select_related('institution').get(
                     pk=int(student_id), parent__user=user,
                 )
             except (ValueError, StudentProfile.DoesNotExist):

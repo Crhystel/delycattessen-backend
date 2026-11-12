@@ -1057,7 +1057,7 @@ class PreOrderCreator(AllergenValidatorMixin, ParentalControlValidatorMixin):
 
     def _get_own_student(self, student_id):
         try:
-            student = StudentProfile.objects.select_related('institution', 'wallet', 'parent').get(id=student_id)
+            student = StudentProfile.objects.active().select_related('institution', 'wallet', 'parent').get(id=student_id)
         except StudentProfile.DoesNotExist:
             raise ValidationError({'student_id': _('Estudiante no encontrado.')})
         if not self.parent_profile or student.parent_id != self.parent_profile.id:

@@ -56,6 +56,7 @@ class CanRegisterBiometric(BasePermission):
         profile = getattr(obj, 'student_profile', None)
         return bool(
             user.role == CustomUser.Role.PARENT
+            and obj.deleted_at is None
             and profile is not None
             and profile.parent.user_id == user.id
         )
@@ -127,7 +128,7 @@ class IsParentOfStudent(BasePermission):
         student_id = view.kwargs.get('student_id')
         if not student_id or request.user.role != CustomUser.Role.PARENT:
             return False
-        return StudentProfile.objects.filter(pk=student_id, parent__user=request.user).exists()
+        return StudentProfile.objects.active().filter(pk=student_id, parent__user=request.user).exists()
 
 
 class IsOperativeUser(RolePermission):

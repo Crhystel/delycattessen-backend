@@ -256,6 +256,9 @@ TERMS_VERSION = config('TERMS_VERSION', default='2026-11')
 # Seconds a card recharge may wait in the queue for a Celery worker. Past that it
 # is marked failed and never charged (the parent simply tries again).
 RECHARGE_QUEUE_TIMEOUT_SECONDS = config('RECHARGE_QUEUE_TIMEOUT_SECONDS', default=120, cast=int)
+# A child cannot be removed while a card recharge started in the last N minutes is
+# still pending; an abandoned one stops blocking after that.
+CHILD_REMOVAL_PENDING_RECHARGE_MINUTES = config('CHILD_REMOVAL_PENDING_RECHARGE_MINUTES', default=60, cast=int)
 
 KUSHKI_PUBLIC_MERCHANT_ID = config('KUSHKI_PUBLIC_MERCHANT_ID', default='')
 KUSHKI_PRIVATE_MERCHANT_ID = config('KUSHKI_PRIVATE_MERCHANT_ID', default='')

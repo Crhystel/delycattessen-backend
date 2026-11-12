@@ -17,7 +17,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from core.biometrics import BiometricValidationMixin
 
 from .audit import display_name, record_audit
-from .models import AuditLog, CustomUser, StudentProfile, UserBiometric
+from .models import AuditLog, CustomUser, ParentalControl, StudentProfile, UserBiometric
 from .tasks import send_child_password_changed_email, send_staff_credentials_email
 
 logger = logging.getLogger(__name__)
@@ -160,6 +160,96 @@ def change_child_password(student, new_password, parent, request=None):
         source=AuditLog.Source.API, detail={'changed_by': 'parent'},
     )
     transaction.on_commit(lambda: notify_child_password_changed(student))
+
+
+class ChildRemovalBlocked(Exception):
+    """The child still has money, orders or a recharge in flight. The view answers
+    409 with the reasons in `blockers` so the app can list them."""
+    code = 'child_removal_blocked'
+
+    def __init__(self, blockers):
+        self.blockers = blockers
+        self.message = child_removal_message(blockers)
+        super().__init__(self.message)
+
+
+def child_removal_message(blockers):
+    """Spanish sentence with every reason that prevents the removal."""
+    reasons = []
+    if 'balance' in blockers:
+        reasons.append(_('todavía tiene saldo en su billetera ($%(amount)s)') % {'amount': blockers['balance']})
+    if 'pending_pre_orders' in blockers:
+        reasons.append(_('tiene preórdenes pendientes de entrega'))
+    if 'pending_recharges' in blockers:
+        reasons.append(_('tiene una recarga en proceso'))
+    return _('No se puede dar de baja a tu hijo/a: %(reasons)s.') % {'reasons': '; '.join(str(r) for r in reasons)}
+
+
+def child_removal_blockers(student, wallet=None):
+    """What stops a parent from removing `student`: money in the wallet, pre-orders
+    not delivered yet (today or later) and a card recharge started recently that
+    has not finished. Empty dict = it can be removed. Pass the (locked) `wallet`
+    when deciding inside a transaction."""
+    from core.timezone import local_today
+    from wallet.models import Transaction, Wallet
+
+    if wallet is None:
+        wallet = Wallet.objects.filter(student=student).first()
+    blockers = {}
+    if wallet is not None and wallet.balance > 0:
+        blockers['balance'] = str(wallet.balance)
+
+    pending_orders = student.pre_orders.filter(status='PENDING', daily_menu__date__gte=local_today()).count()
+    if pending_orders:
+        blockers['pending_pre_orders'] = pending_orders
+
+    if wallet is not None:
+        since = timezone.now() - timedelta(minutes=settings.CHILD_REMOVAL_PENDING_RECHARGE_MINUTES)
+        pending_recharges = wallet.transactions.filter(
+            type=Transaction.Type.RECHARGE, status=Transaction.Status.PENDING, created_at__gte=since,
+        ).count()
+        if pending_recharges:
+            blockers['pending_recharges'] = pending_recharges
+    return blockers
+
+
+@transaction.atomic
+def remove_child(student, parent, request=None):
+    """The parent removes their child. Soft delete, never a real one: the wallet,
+    its transactions and the pre-orders are PROTECTed and the sales history must
+    keep the child. The account becomes unusable, the face, allergies, parental
+    control and photo are erased and the child's sessions are closed. Raises
+    ChildRemovalBlocked while the child still has a balance or open orders."""
+    from wallet.models import Wallet
+
+    # Lock the wallet so a debit or credit in flight cannot slip in between the
+    # check and the removal.
+    wallet = Wallet.objects.select_for_update().filter(student=student).first()
+    blockers = child_removal_blockers(student, wallet)
+    if blockers:
+        raise ChildRemovalBlocked(blockers)
+
+    child = student.user
+    soft_delete_account(child)
+    student.allergies.clear()
+    ParentalControl.objects.filter(student=student).delete()
+    _erase_profile_picture(student)
+    revoke_user_tokens(child)
+    record_audit(
+        AuditLog.Action.ACCOUNT_REMOVED, actor=parent, target=child, request=request,
+        source=AuditLog.Source.API, detail={'role': child.role, 'removed_by': 'parent'},
+    )
+
+
+def _erase_profile_picture(student):
+    """Clears the minor's photo; the file is deleted once the removal commits."""
+    picture = student.profile_picture
+    if not picture:
+        return
+    name, storage = picture.name, picture.storage
+    student.profile_picture = ''
+    student.save(update_fields=['profile_picture'])
+    transaction.on_commit(lambda: storage.delete(name))
 
 
 def extract_embedding(photo):

@@ -127,6 +127,14 @@ class ParentProfile(models.Model):
         verbose_name = _('perfil de padre')
         verbose_name_plural = _('perfiles de padres')
 
+class StudentProfileQuerySet(models.QuerySet):
+    def active(self):
+        """Students whose account was not removed by the parent. A removed child
+        is kept for the history (sales, pre-orders, reports) but is gone for
+        everything a parent can reach."""
+        return self.filter(user__deleted_at__isnull=True)
+
+
 class StudentProfile(models.Model):
     # PROTECT: the wallet, its transactions and the pre-orders hang from this profile.
     user = models.OneToOneField(
@@ -144,6 +152,8 @@ class StudentProfile(models.Model):
     allergies = models.ManyToManyField(
         'catalog.Allergen', verbose_name=_('allergies'), blank=True, related_name='students'
     )
+
+    objects = StudentProfileQuerySet.as_manager()
 
     def __str__(self) -> str:
         return str(_('Perfil de Estudiante: %(username)s')) % {'username': self.user.username}
