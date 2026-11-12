@@ -46,7 +46,7 @@ class RechargeRequestSerializer(serializers.Serializer):
 class TransactionSerializer(LineSummaryMixin, serializers.ModelSerializer):
     class Meta:
         model = Transaction
-        fields = ['id', 'display_name', 'amount', 'gateway', 'status', 'type', 'time', 'created_at', 'items']
+        fields = ['id', 'display_name', 'amount', 'gateway', 'status', 'type', 'balance_after', 'time', 'created_at', 'items']
         read_only_fields = fields
 
     def get_lines(self, obj):
