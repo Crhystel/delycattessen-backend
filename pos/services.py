@@ -25,7 +25,7 @@ from kombu.exceptions import OperationalError
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from catalog.models import DailyMenu, MenuItem, MonthlyMenu
-from catalog.services import ComboService
+from catalog.services import ComboService, LowStockService
 from core.timezone import LOCAL_TIMEZONE, local_now, local_today
 from users.models import CustomUser, StudentProfile
 from users.permissions import get_object_institution_id
@@ -142,9 +142,12 @@ class SaleProcessor(AllergenValidatorMixin):
         return [(by_id[menu_item_id], quantity) for menu_item_id, quantity in quantities.items()]
 
     def _discount_stock(self, items):
+        changes = {}
         for item, quantity in items:
             new_stock = item.stock - quantity
             MenuItem.objects.filter(pk=item.pk).update(stock=new_stock, is_visible=new_stock > 0)
+            changes[item.pk] = (item.stock, new_stock)
+        LowStockService.check(self.institution, changes)
 
 
 class CashSaleProcessor(SaleProcessor):

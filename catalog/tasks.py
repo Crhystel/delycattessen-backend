@@ -11,7 +11,7 @@ from django.template.loader import render_to_string
 from django.utils.html import strip_tags
 from celery import shared_task
 from core.timezone import local_today
-from .models import Combo, MonthlyMenu
+from .models import Combo, MenuItem, MonthlyMenu
 
 logger = logging.getLogger(__name__)
 
@@ -268,3 +268,54 @@ def send_combo_created_email(self, combo_id: int) -> None:
         raise self.retry(exc=exc)
     finally:
         _close_quietly(connection)
+
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=10, acks_late=True, reject_on_worker_lost=True)
+def send_low_stock_email(self, institution_id: int, product_ids: list[int], combo_ids: list[int]) -> None:
+    """
+    Emails the active admins of the institution (low_stock.html) about the
+    products and combos that just fell to LOW_STOCK_THRESHOLD units or ran out.
+    Shows the stock at sending time.
+    """
+    from users.models import CustomUser
+    from .services import ComboService
+
+    admins = list(
+        CustomUser.objects.filter(role=CustomUser.Role.ADMIN, is_active=True, institution_id=institution_id)
+        .exclude(email='')
+        .exclude(email__isnull=True)
+        .values_list('email', flat=True)
+    )
+    if not admins:
+        logger.info(f"No admins with email in institution {institution_id}. Low stock email not sent.")
+        return
+
+    products = [
+        {'name': product.name, 'stock': product.stock}
+        for product in MenuItem.objects.filter(pk__in=product_ids).order_by('stock', 'name')
+    ]
+    combos = [
+        {'name': combo.name, 'stock': ComboService.available_units(combo)}
+        for combo in Combo.objects.filter(pk__in=combo_ids).prefetch_related('items__menu_item').order_by('name')
+    ]
+    if not products and not combos:
+        return
+    html_content = render_to_string('emails/low_stock.html', {
+        'products': products,
+        'combos': combos,
+        'threshold': settings.LOW_STOCK_THRESHOLD,
+    })
+    names = [entry['name'] for entry in products + combos]
+    more = ' y más' if len(names) > 3 else ''
+    message = EmailMultiAlternatives(
+        subject=f"Stock bajo en Snack-Up: {', '.join(names[:3])}{more}",
+        body=_plain_text(html_content),
+        from_email=_from_email(),
+        to=admins,
+    )
+    message.attach_alternative(html_content, 'text/html')
+    try:
+        message.send()
+    except Exception as exc:
+        logger.error(f"Error sending low stock email: {exc}")
+        raise self.retry(exc=exc)

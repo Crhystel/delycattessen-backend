@@ -84,6 +84,8 @@ Un `Combo` agrupa productos a un precio fijo (p. ej. sánduche + cola a $3.50). 
 
 **Aviso por correo al crear un combo:** `ComboService.notify_created` (llamado por `ComboListCreateView.perform_create`, solo al crear, no al editar ni borrar) encola `catalog.tasks.send_combo_created_email` al confirmar la transacción, igual que el aviso del menú mensual. Envía un correo por padre activo con hijos en la sede del combo (nombre, productos con sus cantidades, vigencia y **la imagen del combo incrustada** como `Content-ID`, con correo `multipart/related`; sin precios ni ahorro, y si el archivo no se puede leer, sale sin imagen). Comparte con el aviso del menú los helpers de destinatarios, remitente y envío por lotes de `catalog/tasks.py`.
 
+**Aviso de stock bajo a los administradores:** al descontar stock, `SaleProcessor._discount_stock` pasa a `LowStockService.check` el stock antes y después de cada producto vendido. Alerta un producto o un combo vigente que lo use (con `ComboService.available_units`, antes y después de la venta) solo cuando **cruza** `LOW_STOCK_THRESHOLD` (5 por defecto) o llega a 0: mientras sigue bajo no repite y vuelve a avisar si se repone y baja otra vez. Al confirmar la venta encola `catalog.tasks.send_low_stock_email` (un broker caído no rompe la venta), que manda un solo correo (`emails/low_stock.html`) a los administradores activos con correo de esa sede, con el stock al momento del envío ("Quedan N" o "Agotado"). Los platos del menú mensual no tienen stock y no entran.
+
 ### 5.4 Preorden
 `PreOrderCreator` (en `pos/services.py`) valida fecha de entrega (posterior a hoy), menú publicado de la institución, disponibilidad de platillos, control parental y alérgenos, y debita la billetera, todo en una transacción. `deliver_preorder()` la marca entregada solo el día correspondiente.
 
@@ -130,7 +132,7 @@ Variables en `.env.example`, agrupadas en seguridad, entorno, base de datos, ser
 
 - `wallet.tasks.process_recharge_task`, `send_recharge_confirmation_email`
 - `users.tasks.send_password_reset_email`, `send_staff_credentials_email` (contraseña temporal de un docente o personal operativo recién creado)
-- `catalog.tasks` (`send_monthly_menu_published_email`: aviso de menú mensual publicado; `send_combo_created_email`: aviso de combo nuevo con su imagen)
+- `catalog.tasks` (`send_monthly_menu_published_email`: aviso de menú mensual publicado; `send_combo_created_email`: aviso de combo nuevo con su imagen; `send_low_stock_email`: productos y combos en stock bajo o agotados, a los administradores de la sede)
 - `pos.tasks.build_teacher_credit_export_task` (Excel o PDF del reporte de crédito docente), `send_credit_statement_email` (estado de cuenta mensual de un docente)
 
 Worker local: `run_celery.bat`. Redis y RabbitMQ locales: `docker compose up -d`.

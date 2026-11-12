@@ -245,6 +245,9 @@ WALLET_RECHARGE_GATEWAY_THRESHOLD = config('WALLET_RECHARGE_GATEWAY_THRESHOLD', 
 WALLET_RECHARGE_MIN_AMOUNT = config('WALLET_RECHARGE_MIN_AMOUNT', default=1.00, cast=float)
 # Balance below which a new wallet warns the parent.
 WALLET_LOW_BALANCE_DEFAULT = config('WALLET_LOW_BALANCE_DEFAULT', default=5.00, cast=float)
+# Units at or below which a product or combo is "low stock": the admins of its
+# institution get an email when a sale crosses it (and again when it runs out).
+LOW_STOCK_THRESHOLD = config('LOW_STOCK_THRESHOLD', default=5, cast=int)
 # Seconds to wait for a payment gateway HTTP answer.
 GATEWAY_HTTP_TIMEOUT = config('GATEWAY_HTTP_TIMEOUT', default=10, cast=int)
 # Version of the terms and conditions users accept when they register a parent or

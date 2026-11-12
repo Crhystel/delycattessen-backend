@@ -4,6 +4,7 @@ from datetime import date
 from functools import partial
 from typing import Iterable, Sequence
 from kombu.exceptions import OperationalError
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
@@ -12,7 +13,7 @@ from rest_framework.exceptions import ValidationError
 from core.timezone import local_today
 
 from .models import Allergen, Combo, ComboItem, MonthlyMenu, DailyMenu, MenuDish, MenuItem
-from .tasks import send_combo_created_email, send_monthly_menu_published_email
+from .tasks import send_combo_created_email, send_low_stock_email, send_monthly_menu_published_email
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,15 @@ def _notify_combo_created(combo_id: int) -> None:
         send_combo_created_email.delay(combo_id)
     except (OperationalError, OSError):
         logger.exception('Could not enqueue new-combo email for combo %s', combo_id)
+
+
+def _notify_low_stock(institution_id: int, product_ids: list[int], combo_ids: list[int]) -> None:
+    """Enqueues the low stock email. The sale is already committed, so an
+    unreachable broker must not turn it into a 500."""
+    try:
+        send_low_stock_email.delay(institution_id, product_ids, combo_ids)
+    except (OperationalError, OSError):
+        logger.exception('Could not enqueue low stock email for institution %s', institution_id)
 
 
 def sync_allergens_from_ingredients(obj) -> None:
@@ -160,12 +170,14 @@ class ComboService:
         return queryset.in_force(cls.today()).prefetch_related('items__menu_item')
 
     @staticmethod
-    def available_units(combo: Combo) -> int:
+    def available_units(combo: Combo, stocks: dict[int, int] | None = None) -> int:
         """How many units of `combo` can be sold with the stock of its products:
         the minimum of floor(stock / quantity) over its items. A combo without
-        products or with an inactive product has none."""
+        products or with an inactive product has none. `stocks` (product id ->
+        stock) replaces the stored stock of those products."""
+        stocks = stocks or {}
         units = [
-            item.menu_item.stock // item.quantity if item.menu_item.is_active else 0
+            stocks.get(item.menu_item_id, item.menu_item.stock) // item.quantity if item.menu_item.is_active else 0
             for item in combo.items.all()
         ]
         return min(units, default=0)
@@ -224,3 +236,34 @@ class ComboService:
         ComboItem.objects.bulk_create([
             ComboItem(combo=combo, menu_item=product, quantity=quantity) for product, quantity in items
         ])
+
+
+class LowStockService:
+    """Emails the admins of the institution when a sale leaves a product or a
+    combo in force at LOW_STOCK_THRESHOLD units or less, and again when it runs
+    out. Only crossings alert: it is quiet while the stock stays low and alerts
+    again after a restock."""
+
+    @staticmethod
+    def crossed(before: int, after: int) -> bool:
+        """True when the stock enters the low level or runs out."""
+        threshold = settings.LOW_STOCK_THRESHOLD
+        return before > threshold >= after or before > 0 == after
+
+    @classmethod
+    def check(cls, institution, stock_changes: dict[int, tuple[int, int]]) -> None:
+        """`stock_changes` maps product id -> (stock before, stock after) of a
+        sale; call it after the new stock is saved, inside the sale transaction."""
+        product_ids = sorted(pk for pk, (before, after) in stock_changes.items() if cls.crossed(before, after))
+        before_stocks = {pk: before for pk, (before, _after) in stock_changes.items()}
+        combos = ComboService.in_force(
+            Combo.objects.filter(institution=institution, items__menu_item_id__in=stock_changes).distinct()
+        )
+        combo_ids = sorted(
+            combo.id for combo in combos
+            if cls.crossed(
+                ComboService.available_units(combo, before_stocks), ComboService.available_units(combo),
+            )
+        )
+        if product_ids or combo_ids:
+            transaction.on_commit(partial(_notify_low_stock, institution.id, product_ids, combo_ids))

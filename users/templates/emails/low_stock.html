@@ -1,0 +1,59 @@
+{% extends "emails/base.html" %}
+{% block content %}
+<p
+  style="
+    font-family: &quot;Sora&quot;, Arial, sans-serif;
+    font-size: 17px;
+    font-weight: 600;
+    color: #0c1b2a;
+    margin: 0 0 16px 0;
+  "
+>
+  Stock bajo
+</p>
+<p style="font-size: 15px; color: #3d4e5c; line-height: 1.5; margin: 0 0 20px 0">
+  Con las últimas ventas, estos productos y combos quedaron con
+  {{ threshold }} unidades o menos. Repón el stock desde el panel web para
+  seguir vendiéndolos.
+</p>
+
+{% if products %}
+<p style="font-size: 12px; font-weight: 800; letter-spacing: 1.5px; color: #6b7b8a; text-transform: uppercase; margin: 0 0 6px 0">
+  Productos
+</p>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin: 0 0 20px 0">
+  {% for product in products %}
+  <tr>
+    <td style="padding: 6px 0; font-size: 14px; color: #0c1b2a; font-weight: 600; border-bottom: 1px solid #efefef">
+      {{ product.name }}
+    </td>
+    <td align="right" style="padding: 6px 0; font-size: 14px; font-weight: 700; border-bottom: 1px solid #efefef; color: {% if product.stock %}#a87028{% else %}#c0392b{% endif %}">
+      {% if product.stock %}Quedan {{ product.stock }}{% else %}Agotado{% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% endif %}
+
+{% if combos %}
+<p style="font-size: 12px; font-weight: 800; letter-spacing: 1.5px; color: #6b7b8a; text-transform: uppercase; margin: 0 0 6px 0">
+  Combos vigentes
+</p>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin: 0 0 20px 0">
+  {% for combo in combos %}
+  <tr>
+    <td style="padding: 6px 0; font-size: 14px; color: #0c1b2a; font-weight: 600; border-bottom: 1px solid #efefef">
+      {{ combo.name }}
+    </td>
+    <td align="right" style="padding: 6px 0; font-size: 14px; font-weight: 700; border-bottom: 1px solid #efefef; color: {% if combo.stock %}#a87028{% else %}#c0392b{% endif %}">
+      {% if combo.stock %}Quedan {{ combo.stock }}{% else %}Agotado{% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% endif %}
+
+<p style="font-size: 13px; color: #6b7b8a; line-height: 1.5; margin: 0">
+  Un combo depende del stock de sus productos: se repone al reponerlos.
+</p>
+{% endblock %}
