@@ -376,7 +376,7 @@ class PreOrderMonthlyMenuTests(TestCase):
             "items": [{"dish_id": self.dish_pollo.id, "quantity": 1}]
         }, format='json')
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("No está permitido comprar para ese día: está bloqueado por el control parental.", str(res.data))
+        self.assertIn("Bloqueado por el control parental: no se permite comprar el ", str(res.data))
 
     def test_preorder_parental_control_daily_limit_exceeded(self):
         """7. Control parental: supera límite diario para esa fecha -> 400."""
@@ -400,7 +400,12 @@ class PreOrderMonthlyMenuTests(TestCase):
             "items": [{"dish_id": self.dish_pollo.id, "quantity": 1}]
         }, format='json')
         self.assertEqual(res2.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("La preorden supera el límite de gasto diario configurado para ese día.", str(res2.data))
+        self.assertIn(
+            "Bloqueado por el control parental: esta compra de $3.50 supera el límite diario de $8.00. "
+            "Para el ",
+            str(res2.data),
+        )
+        self.assertIn("ya van $7.00 gastados y solo quedan $1.00 disponibles.", str(res2.data))
 
     def test_preorder_allergen_blocked(self):
         """8. Alérgeno: platillo con alérgeno del estudiante -> 400 (bloqueo absoluto)."""
@@ -478,6 +483,22 @@ class PreOrderMonthlyMenuTests(TestCase):
         self.assertEqual(res_today_deliver.status_code, status.HTTP_200_OK)
         pre_order_today.refresh_from_db()
         self.assertEqual(pre_order_today.status, PreOrder.Status.DELIVERED)
+
+    def test_monthly_menu_blocked_day_explains_the_rule(self):
+        """The blocked day of the menu says the day and the allowed days."""
+        self.client.force_authenticate(user=self.parent_user)
+        allowed = (self.future_date.weekday() + 1) % 7
+        self.parental_control.allowed_days_enabled = True
+        self.parental_control.allowed_days = [allowed]
+        self.parental_control.save()
+
+        res = self.client.get(f'/api/catalog/students/{self.student_profile.id}/monthly_menu/')
+
+        day = next(d for d in res.data if d['date'] == str(self.future_date))
+        self.assertTrue(day['is_blocked_by_parental_control'])
+        self.assertIn('Bloqueado por el control parental: no se permite comprar el ', day['blocked_reason'])
+        weekdays = ['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo']
+        self.assertIn(f'Días permitidos: {weekdays[allowed]}.', day['blocked_reason'])
 
     def test_student_monthly_menu_parent_endpoint(self):
         """10. Consulta de menú mensual por parte del padre."""

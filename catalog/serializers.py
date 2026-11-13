@@ -2,6 +2,10 @@ from decimal import Decimal
 from django.db import transaction
 from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
+
+from core.timezone import local_today
+from users.services import ParentalControlMessages
+
 from .models import MenuItem, Allergen, Ingredient, MenuDish, MonthlyMenu, DailyMenu, Combo
 from .mixins import (
     AllergenSyncMixin, IngredientValidationMixin, ValidityPeriodSerializerMixin, ViewerAllergenFieldsMixin,
@@ -287,7 +291,7 @@ class StudentDailyMenuSerializer(serializers.ModelSerializer):
             if control.allowed_days_enabled:
                 if obj.date.weekday() not in control.allowed_days:
                     is_blocked = True
-                    blocked_reason = "No está permitido comprar para ese día: está bloqueado por el control parental."
+                    blocked_reason = ParentalControlMessages.blocked_day(control, obj.date, local_today())
 
         obj._parental_control_info = (is_blocked, blocked_reason)
         return obj._parental_control_info

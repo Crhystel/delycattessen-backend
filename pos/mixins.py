@@ -7,6 +7,7 @@ from rest_framework.exceptions import ValidationError
 
 from core.timezone import LOCAL_TIMEZONE, local_today
 from users.models import StudentProfile
+from users.services import ParentalControlMessages
 from wallet.models import Transaction
 
 
@@ -43,6 +44,10 @@ class AllergenValidatorMixin:
         return _('El producto "%(product)s" contiene alérgenos que te afectan: %(allergens)s') % params
 
 class ParentalControlValidatorMixin:
+    """Rejects a wallet sale or a preorder the parent's control does not allow.
+    Each message says which rule blocked it (day or daily limit) and the
+    figures, so the parent, the student or the cashier knows what happened."""
+
     def validate_parental_controls(self, student, amount, target_date=None):
         from users.models import ParentalControl
         from .models import PreOrder
@@ -58,7 +63,7 @@ class ParentalControlValidatorMixin:
         if control.allowed_days_enabled:
             # 0 = Monday, ..., 6 = Sunday
             if target_date.weekday() not in control.allowed_days:
-                raise ValidationError(_("No está permitido comprar para ese día: está bloqueado por el control parental."))
+                raise ValidationError(ParentalControlMessages.blocked_day(control, target_date, today_ec))
 
         if control.daily_limit_enabled:
             preorders_sum = PreOrder.objects.filter(
@@ -85,4 +90,6 @@ class ParentalControlValidatorMixin:
 
             spent_target_date = preorders_sum + direct_sum
             if spent_target_date + Decimal(str(amount)) > control.daily_limit_amount:
-                raise ValidationError(_("La preorden supera el límite de gasto diario configurado para ese día."))
+                raise ValidationError(ParentalControlMessages.daily_limit(
+                    control, target_date, today_ec, spent_target_date, Decimal(str(amount)),
+                ))

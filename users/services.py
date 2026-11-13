@@ -3,11 +3,14 @@ import secrets
 import string
 import uuid
 from datetime import datetime, timedelta, timezone as dt_timezone
+from decimal import Decimal
 
 import jwt
 from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
+from django.utils.formats import date_format
+from django.utils.text import get_text_list
 from django.utils.translation import gettext_lazy as _
 from kombu.exceptions import OperationalError
 from rest_framework.exceptions import ValidationError
@@ -399,3 +402,59 @@ def record_terms_acceptance(user, document, request=None, student=None):
         user=user, student=student, document=document,
         version=settings.TERMS_VERSION, ip=client_ip(request),
     )
+
+
+WEEKDAY_NAMES = (
+    _('lunes'), _('martes'), _('miércoles'), _('jueves'), _('viernes'), _('sábado'), _('domingo'),
+)
+
+
+def _money(amount) -> str:
+    return f'${Decimal(amount):.2f}'
+
+
+class ParentalControlMessages:
+    """Why the parental control blocks a purchase, with the day and the figures,
+    so the parent, the student or the cashier can tell one rule from the other.
+    Shared by the POS sale, the preorder and the monthly menu of the student."""
+
+    @staticmethod
+    def _day_label(target_date, today):
+        """"hoy (jueves)" or "el jueves 20 de noviembre"."""
+        if target_date == today:
+            return _('hoy (%(weekday)s)') % {'weekday': WEEKDAY_NAMES[target_date.weekday()]}
+        return _('el %(date)s') % {'date': date_format(target_date, r'l j \d\e F')}
+
+    @classmethod
+    def blocked_day(cls, control, target_date, today):
+        allowed = [WEEKDAY_NAMES[day] for day in sorted(control.allowed_days) if 0 <= day <= 6]
+        params = {'day': cls._day_label(target_date, today)}
+        if not allowed:
+            return _(
+                'Bloqueado por el control parental: no se permite comprar %(day)s. '
+                'Ahora no hay ningún día permitido; el padre de familia puede cambiarlo en Control parental.'
+            ) % params
+        return _(
+            'Bloqueado por el control parental: no se permite comprar %(day)s. '
+            'Días permitidos: %(allowed)s.'
+        ) % {**params, 'allowed': get_text_list(allowed, _('y'))}
+
+    @classmethod
+    def daily_limit(cls, control, target_date, today, spent, amount):
+        limit = control.daily_limit_amount
+        params = {
+            'day': cls._day_label(target_date, today),
+            'limit': _money(limit),
+            'spent': _money(spent),
+            'amount': _money(amount),
+            'left': _money(max(limit - spent, Decimal('0.00'))),
+        }
+        if spent >= limit:
+            return _(
+                'Bloqueado por el control parental: ya se alcanzó el límite diario de %(limit)s para %(day)s '
+                '(van %(spent)s gastados). No se puede comprar más ese día.'
+            ) % params
+        return _(
+            'Bloqueado por el control parental: esta compra de %(amount)s supera el límite diario de '
+            '%(limit)s. Para %(day)s ya van %(spent)s gastados y solo quedan %(left)s disponibles.'
+        ) % params

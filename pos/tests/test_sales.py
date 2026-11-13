@@ -194,15 +194,38 @@ class SaleTests(APITestCase):
         ParentalControl.objects.create(
             student=self.student, allowed_days_enabled=True, allowed_days=[(today.weekday() + 1) % 7])
         self._auth(self.staff_a)
-        self.assertEqual(self._sell('WALLET', user=self.student_user).status_code, 400)
+        blocked = self._sell('WALLET', user=self.student_user)
+        self.assertEqual(blocked.status_code, 400)
+        self.assertIn('Bloqueado por el control parental: no se permite comprar hoy (', str(blocked.data))
+        self.assertIn('Días permitidos: ', str(blocked.data))
         self.assertEqual(self._sell('CASH', user=self.student_user).status_code, 201)
+
+    def test_blocked_day_without_any_allowed_day_says_so(self):
+        ParentalControl.objects.create(student=self.student, allowed_days_enabled=True, allowed_days=[])
+        self._auth(self.staff_a)
+        response = self._sell('WALLET', user=self.student_user)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('Ahora no hay ningún día permitido', str(response.data))
 
     def test_wallet_purchase_counts_toward_daily_limit(self):
         ParentalControl.objects.create(
             student=self.student, daily_limit_enabled=True, daily_limit_amount=Decimal('6.00'))
         self._auth(self.staff_a)
         self.assertEqual(self._sell('WALLET', user=self.student_user).status_code, 201)
-        self.assertEqual(self._sell('WALLET', user=self.student_user).status_code, 400)
+        over = self._sell('WALLET', user=self.student_user)
+        self.assertEqual(over.status_code, 400)
+        self.assertIn('esta compra de $5.00 supera el límite diario de $6.00', str(over.data))
+        self.assertIn('ya van $5.00 gastados y solo quedan $1.00 disponibles', str(over.data))
+
+    def test_reached_daily_limit_says_nothing_more_can_be_bought(self):
+        ParentalControl.objects.create(
+            student=self.student, daily_limit_enabled=True, daily_limit_amount=Decimal('5.00'))
+        self._auth(self.staff_a)
+        self.assertEqual(self._sell('WALLET', user=self.student_user).status_code, 201)
+        reached = self._sell('WALLET', user=self.student_user)
+        self.assertEqual(reached.status_code, 400)
+        self.assertIn('ya se alcanzó el límite diario de $5.00 para hoy (', str(reached.data))
+        self.assertIn('No se puede comprar más ese día.', str(reached.data))
 
     # ---- stock / institution --------------------------------------------------
     def test_insufficient_stock_rejects_whole_sale(self):
