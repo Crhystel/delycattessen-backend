@@ -263,3 +263,111 @@ class ComboTests(APITestCase):
         self._auth(parent_user)
         response = self.client.get(f'{ACTIVE_COMBOS}?student_id={student.id}')
         self.assertEqual([c['id'] for c in response.data], [active.id])
+
+    # --- deleting a product that belongs to a combo -------------------------------
+
+    def _delete_product(self, product):
+        self._auth(self.admin_a)
+        return self.client.delete(f'/api/catalog/menu/{product.id}/')
+
+    def _deleted(self, product):
+        product.is_active = False
+        product.is_visible = False
+        product.save()
+
+    def test_a_product_of_a_combo_in_force_cannot_be_deleted(self, _today):
+        combo = self._combo([(self.sandwich, 1), (self.cola, 1)])
+        response = self._delete_product(self.cola)
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.data['code'], 'product_in_combos')
+        self.assertEqual(response.data['combos'], [{'id': combo.id, 'name': 'Combo'}])
+        self.assertIn('"Cola"', response.data['detail'])
+        self.assertIn('el combo "Combo"', response.data['detail'])
+        self.cola.refresh_from_db()
+        self.assertTrue(self.cola.is_active)
+
+    def test_a_product_of_a_scheduled_combo_cannot_be_deleted_either(self, _today):
+        self._combo([(self.cola, 1)], start=TODAY + timedelta(days=3))
+        self.assertEqual(self._delete_product(self.cola).status_code, 409)
+
+    def test_every_combo_that_uses_the_product_is_named(self, _today):
+        first = self._combo([(self.cola, 1)])
+        second = self._combo([(self.cola, 1), (self.sandwich, 1)])
+        Combo.objects.filter(pk=second.pk).update(name='Combo familiar')
+
+        response = self._delete_product(self.cola)
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual({row['id'] for row in response.data['combos']}, {first.id, second.id})
+        self.assertIn('los combos', response.data['detail'])
+        self.assertIn('"Combo familiar"', response.data['detail'])
+
+    def test_a_product_only_in_expired_combos_can_be_deleted(self, _today):
+        self._combo([(self.cola, 1)], start=TODAY - timedelta(days=20), days=7)
+        self.assertEqual(self._delete_product(self.cola).status_code, 204)
+        self.cola.refresh_from_db()
+        self.assertFalse(self.cola.is_active)
+
+    def test_a_product_without_combos_is_deleted_as_before(self, _today):
+        self._combo([(self.sandwich, 1)])
+        self.assertEqual(self._delete_product(self.cola).status_code, 204)
+        self.cola.refresh_from_db()
+        self.assertFalse(self.cola.is_active)
+
+    def test_the_block_leaves_the_other_products_alone(self, _today):
+        self._combo([(self.sandwich, 1), (self.cola, 1)])
+        self._delete_product(self.cola)
+        self.sandwich.refresh_from_db()
+        self.assertTrue(self.sandwich.is_active)
+        self.assertEqual(self.sandwich.stock, 10)
+
+    # --- combos that already hold a deleted product ----------------------------------
+
+    def test_a_combo_with_a_deleted_product_can_still_be_edited(self, _today):
+        combo = self._combo([(self.sandwich, 1), (self.cola, 1)])
+        self._deleted(self.cola)
+        self._auth(self.admin_a)
+        response = self.client.patch(
+            f'{COMBOS}{combo.id}/',
+            {
+                'name': 'Combo renombrado', 'price': '3.00',
+                'items': json.dumps([{'product_id': self.sandwich.id, 'quantity': 1},
+                                     {'product_id': self.cola.id, 'quantity': 1}]),
+            },
+            format='multipart',
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data['name'], 'Combo renombrado')
+
+    def test_the_deleted_product_can_be_taken_out_of_the_combo(self, _today):
+        combo = self._combo([(self.sandwich, 1), (self.cola, 1)])
+        self._deleted(self.cola)
+        self._auth(self.admin_a)
+        response = self.client.patch(
+            f'{COMBOS}{combo.id}/',
+            {'items': json.dumps([{'product_id': self.sandwich.id, 'quantity': 1}])},
+            format='multipart',
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual([item.menu_item_id for item in combo.items.all()], [self.sandwich.id])
+        self.assertEqual(response.data['available_quantity'], 10)
+
+    def test_a_deleted_product_cannot_be_added_to_a_combo(self, _today):
+        combo = self._combo([(self.sandwich, 1)])
+        self._deleted(self.cola)
+        self._auth(self.admin_a)
+        response = self.client.patch(
+            f'{COMBOS}{combo.id}/',
+            {'items': json.dumps([{'product_id': self.sandwich.id, 'quantity': 1},
+                                  {'product_id': self.cola.id, 'quantity': 1}])},
+            format='multipart',
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(combo.items.count(), 1)
+
+    def test_a_deleted_product_cannot_be_used_to_create_a_combo(self, _today):
+        self._deleted(self.cola)
+        self._auth(self.admin_a)
+        response = self.client.post(COMBOS, self._payload([(self.cola, 1)]), format='multipart')
+        self.assertEqual(response.status_code, 400)
