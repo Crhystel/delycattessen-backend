@@ -1,5 +1,6 @@
 from decimal import Decimal
 from django.db import transaction
+from django.db.models import Q
 from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
 from .models import MenuItem, Allergen, Ingredient, MenuDish, MonthlyMenu, DailyMenu, Combo
@@ -318,8 +319,18 @@ class ComboItemSerializer(ViewerAllergenFieldsMixin, serializers.Serializer):
         return obj.menu_item
 
 
+class ComboProductField(serializers.PrimaryKeyRelatedField):
+    """A product of a combo: an active one, or one the combo being edited already
+    has (`context['current_product_ids']`). The second case lets an admin save or
+    repair a combo whose product was deleted; a deleted product can never be added."""
+
+    def get_queryset(self):
+        kept = self.context.get('current_product_ids', ())
+        return MenuItem.objects.filter(Q(is_active=True) | Q(pk__in=kept))
+
+
 class ComboItemInputSerializer(serializers.Serializer):
-    product_id = serializers.PrimaryKeyRelatedField(queryset=MenuItem.objects.filter(is_active=True))
+    product_id = ComboProductField(queryset=MenuItem.objects.all())
     quantity = serializers.IntegerField(min_value=1)
 
 
@@ -349,7 +360,11 @@ class ComboSerializer(ValidityPeriodSerializerMixin, serializers.ModelSerializer
     def validate_items(self, value):
         if not isinstance(value, list) or not value:
             raise serializers.ValidationError(_('Agrega al menos un producto al combo.'))
-        items = ComboItemInputSerializer(data=value, many=True)
+        current = (
+            {item.menu_item_id: item.quantity for item in self.instance.items.all()}
+            if self.instance else {}
+        )
+        items = ComboItemInputSerializer(data=value, many=True, context={'current_product_ids': set(current)})
         items.is_valid(raise_exception=True)
         pairs = [(row['product_id'], row['quantity']) for row in items.validated_data]
         products = [product for product, _quantity in pairs]
@@ -358,10 +373,6 @@ class ComboSerializer(ValidityPeriodSerializerMixin, serializers.ModelSerializer
         institution = self.context.get('institution')
         if institution and any(product.institution_id != institution.id for product in products):
             raise serializers.ValidationError(_('Uno o más productos no pertenecen a esta institución.'))
-        current = (
-            {item.menu_item_id: item.quantity for item in self.instance.items.all()}
-            if self.instance else {}
-        )
         ComboService.validate_stock(pairs, current)
         return pairs
 

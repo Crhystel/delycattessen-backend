@@ -154,11 +154,43 @@ class MonthlyMenuService:
         return monthly_menu
 
 
+class ProductInUseByCombos(Exception):
+    """The product still belongs to a combo that is in force or has not started.
+    The view answers 409 with the combos in `combos` so the admin knows where
+    to remove it first."""
+    code = 'product_in_combos'
+
+    def __init__(self, product, combos):
+        self.combos = [{'id': combo.id, 'name': combo.name} for combo in combos]
+        names = ', '.join(f'"{combo.name}"' for combo in combos)
+        where = _('está en el combo %(names)s') if len(combos) == 1 else _('está en los combos %(names)s')
+        self.message = _('No puedes eliminar "%(product)s": %(where)s. Quita el producto de esos combos primero.') % {
+            'product': product.name, 'where': str(where) % {'names': names},
+        }
+        super().__init__(self.message)
+
+
 class ComboService:
     """
     Service Layer Pattern: combos in force and their contents, shared by the
     catalog banner and the POS sale. Validity uses Ecuador's local date.
     """
+
+    @classmethod
+    def combos_using(cls, product: MenuItem) -> list[Combo]:
+        """Combos that include `product` and have not expired yet (in force or
+        scheduled). Expired ones are history and do not block anything."""
+        return list(
+            Combo.objects.filter(items__menu_item=product, end_date__gte=cls.today()).distinct().order_by('name')
+        )
+
+    @classmethod
+    def ensure_product_unused(cls, product: MenuItem) -> None:
+        """Raises ProductInUseByCombos while a combo that has not expired still
+        includes `product`: deleting it would leave that combo with a dead item."""
+        combos = cls.combos_using(product)
+        if combos:
+            raise ProductInUseByCombos(product, combos)
 
     @staticmethod
     def today() -> date:

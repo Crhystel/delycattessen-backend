@@ -32,7 +32,7 @@ from .serializers import (
     MonthlyMenuSerializer,
     StudentDailyMenuSerializer,
 )
-from .services import ComboService, MonthlyMenuService
+from .services import ComboService, MonthlyMenuService, ProductInUseByCombos
 
 
 class MenuListView(ViewerAllergenContextMixin, ViewerInstitutionMixin, generics.ListAPIView):
@@ -74,6 +74,18 @@ class MenuItemDetailView(OwnInstitutionMixin, generics.RetrieveUpdateDestroyAPIV
     queryset = MenuItem.objects.all()
     serializer_class = MenuItemSerializer
     permission_classes = [IsAdministrator]
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        try:
+            ComboService.ensure_product_unused(instance)
+        except ProductInUseByCombos as blocked:
+            return Response(
+                {'detail': blocked.message, 'code': blocked.code, 'combos': blocked.combos},
+                status=status.HTTP_409_CONFLICT,
+            )
+        self.perform_destroy(instance)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     def perform_destroy(self, instance):
         instance.is_active = False
