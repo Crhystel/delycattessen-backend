@@ -63,16 +63,25 @@ def _send_in_batches(connection, messages: Iterable[EmailMultiAlternatives]) -> 
     Returns how many were sent."""
     batch = []
     total_sent = 0
-    for message in messages:
-        batch.append(message)
-        if len(batch) >= EMAIL_BATCH_SIZE:
+    try:
+        for message in messages:
+            batch.append(message)
+            if len(batch) >= EMAIL_BATCH_SIZE:
+                connection.send_messages(list(batch))
+                total_sent += len(batch)
+                batch.clear()
+        if batch:
             connection.send_messages(list(batch))
             total_sent += len(batch)
             batch.clear()
-    if batch:
-        connection.send_messages(list(batch))
-        total_sent += len(batch)
-        batch.clear()
+    finally:
+        # The generator reads its recipients with .iterator(), a server-side
+        # cursor on PostgreSQL. If sending fails halfway, close it now: closed
+        # later by the garbage collector, the cursor no longer exists and the
+        # failed CLOSE aborts whatever transaction is running at that moment.
+        close = getattr(messages, 'close', None)
+        if close:
+            close()
     return total_sent
 
 
